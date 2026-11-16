@@ -1,0 +1,98 @@
+#!/bin/bash
+
+devmode=0
+while getopts "d" OPT; do
+    case "$OPT" in
+    d) devmode=1 ;;
+    esac
+done
+
+[ "$devmode" = 1 ] && {
+    esbuildOpts=--sourcemap
+}
+
+#create config.ts from ini {{{
+AIO_CONFIGTS=./www/config.ts
+
+handle_configts_from_ini() {
+    section=""
+    while read -r line; do
+        case "$line" in
+        \[*\])
+            name="${line#'['}"
+            name="${name%']'}"
+            section="$name"
+            ;;
+        '') continue ;;
+        *)
+            name="${line%%[[:space:]]=*}"
+            value="${line#*=[[:space:]]}"
+
+            # comment
+            [[ "${name[0]}" =~ [[:space:]]*# ]] && continue 
+
+            case "$section" in
+            aio_limas)
+                case "$name" in
+                    host) host="$value" ;;
+                    api) api="$value" ;;
+                esac
+                ;;
+            ui) export "$name"="$value" ;;
+            esac
+            ;;
+        esac
+    done <./www/server-config.ini
+
+    cat <<-EOF >"$AIO_CONFIGTS"
+//making this not a constant so that a tampermonkey script can change it because i want to change it with a tampermonkey script
+let AIO = "${host:-http://localhost:8080}"
+const API = "${api:-/api/v1}"
+
+const ENABLE_UNSAFE = ${enable_unsafe}
+EOF
+}
+
+handle_configts_from_ini
+
+#}}}
+
+# Generate JS API documentation
+generate_js_api_docs() {
+    local js_api_file="./www/ui/js_api.ts"
+    local docs_file="./www/usage/js_api_docs.html"
+
+    # Create temporary file for processing
+    local temp_file=$(mktemp)
+
+    # Extract function documentation using awk
+    for file in $(find . -wholename './www/*/*.ts'); do
+        gawk -f ./build-system/gen-docs -v "file=${file##./www/}" "$file"
+    done | sed -e "/{{CONTENT}}/r /dev/stdin" -e "/{{CONTENT}}/d" "./build-system/js_api_docs_template.html" >"$temp_file"
+
+    gawk -f ./build-system/gen-de-action-docs "./www/ui/view-modes/displayEntry.ts" > ./www/usage/display-entry-actions.html
+
+    # Move the processed file to the final location
+    mv "$temp_file" "$docs_file"
+}
+
+generate_js_api_docs
+
+generateSidebarStyles() {
+    styles=$(cat "./www/css/colors.css" "./www/css/general.css" "./www/ui/templates/sidebar-entry.css")
+    python -c "
+( (f := open('./www/ui/components.js', 'r+')),
+   text := f.read(),
+   text := text.replace(\"{{{_BUILDTIME_REPLACE_}}}\${Math.random()}\", \"\"\"${styles}\"\"\"),
+   f.seek(0),
+   f.write(text),
+   f.close()
+)"
+}
+
+#esbuild/typescript stuff
+esbuild $(find . -regex '.*\.ts$') --minify --outdir=www $esbuildOpts
+
+generateSidebarStyles
+
+#main go program

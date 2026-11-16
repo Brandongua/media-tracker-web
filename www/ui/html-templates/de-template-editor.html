@@ -1,0 +1,62 @@
+<template id="de-template-editor">
+    <dialog id="template-editor-container" onclose="
+            clearInterval(this.querySelector(`input[type='text']`)._i)
+        " style="font-size: 1rem;">
+        <script>
+            async function _updateTemplate() {
+                try {
+                    var res = await fetch(this.value)
+                } catch(err) {
+                    alert('Could not fetch from the url')
+                    clearInterval(this._i)
+                    this._i = null
+                }
+                this.getRootNode()
+                    .getElementById('template-editor')
+                    .value = await res.text()
+                this.getRootNode()
+                    .getElementById('template-editor')._updatePreview()
+            }
+        </script>
+        <h2 style="font-size: revert;" class="center">Template editor</h2>
+
+        <div class="j-center flex small-gap">
+            <input id="template-url" type="text" placeholder="pull from url"
+                onchange="_updateTemplate.call(this)"
+            />
+            <button
+                onclick="_updateTemplate.call(
+                    this.getRootNode().querySelector('#template-url')
+                )"
+            >
+                Update
+            </button>
+
+            <input id="template-file" type="file" hidden
+                oninput="
+                    const r = new FileReader();
+                    r.onload = (text) => {
+                        this.getRootNode().getElementById('template-editor')
+                            .value = r.result
+                    }
+                    r.readAsText(this.files[0])"
+            >
+            <button
+                onclick="
+                    this.getRootNode().getElementById('template-file').click()"
+            >Upload file as template</button>
+        </div>
+
+        <br>
+
+        <div class="flex j-center">
+            <button entry-action="save">💾︎</button>
+            <button entry-action="previewtemplate" title="preview the template">👁</button>
+        </div>
+        <textarea id="template-editor" style="width: initial; height: initial;" rows="30" cols="80"></textarea>
+
+        <close-button></close-button>
+    </dialog>
+
+    <dialog id="template-preview" style="font-size: 1rem; width: 80vw;"></dialog>
+</template>

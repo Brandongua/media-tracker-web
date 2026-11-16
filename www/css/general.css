@@ -1,0 +1,439 @@
+@layer general {
+
+    *,
+    *::before,
+    *::after {
+        box-sizing: border-box;
+
+        scrollbar-color: var(--scrollbar-bar-color) var(--scrollbar-gutter-color);
+    }
+
+    body {
+        background: var(--main);
+        color: var(--text-color);
+
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+
+    table {
+        border-collapse: collapse;
+
+        td,
+        th {
+            border: 1px solid var(--secondary);
+        }
+    }
+
+    input,
+    label {
+        user-select: none;
+    }
+
+    textarea {
+        color: var(--text-color);
+        border-style: solid;
+    }
+
+    summary {
+        cursor: pointer;
+    }
+
+    progress[max]::-moz-progress-bar,
+    progress[max]::-webkit-progress-bar {
+        background: var(--green);
+    }
+
+    progress {
+        background: var(--blue);
+        appearance: none;
+    }
+
+    button,
+    [role="button"],
+    textarea,
+    input,
+    select {
+        margin-inline: var(--inline-widget-margin);
+        margin-block: var(--block-widget-margin);
+
+        color: inherit;
+
+        /*inherit the font, but keep the font size small because otherwise
+         * it breaks assumptions i had about button font sizes*/
+        font: inherit;
+        font-size: 0.8em;
+
+        border-style: solid;
+        background: var(--input-background);
+
+        &.good, &.bad {
+            font-weight: bold;
+        }
+
+        &:not([type="checkbox"]) {
+            border-color: var(--input-border-color);
+        }
+
+        &:focus-visible, &:active {
+            outline: 3px solid var(--green);
+            /* making it transparent keeps
+             * the box size the same avoiding relayout*/
+            border-color: transparent;
+        }
+    }
+
+    [role="button"],
+    input,
+    button,
+    select {
+        border: var(--input-border);
+        border-radius: var(--border-roundness);
+
+    }
+
+    a {
+        color: unset;
+        text-decoration: unset;
+        cursor: default;
+    }
+
+    a[href] {
+        color: var(--light-blue);
+        cursor: pointer;
+        text-decoration: underline;
+    }
+
+    [data-close-popover] {
+        position: absolute;
+        top: 2%;
+        right: 2%;
+
+        border: 1px solid;
+        border-radius: var(--border-roundness);
+        padding: 5px;
+    }
+
+    input {
+        padding: 5px;
+    }
+
+    form button {
+        padding: 5px;
+    }
+
+    button,
+    select,
+    [role="button"],
+    input[type="submit"],
+    input[type="reset"],
+    input[type="button"] {
+        color: var(--text-color);
+        cursor: pointer;
+        &:hover {
+            background: color-mix(in oklab, currentColor 30%, var(--input-background) 70%);
+        }
+    }
+
+    input[type="checkbox"] {
+        cursor: pointer;
+        appearance: none;
+        vertical-align: bottom;
+        border-radius: var(--border-roundness);
+    }
+
+    input[type="checkbox"]:checked {
+        border-color: oklch(from var(--green) 50% c h);
+        background: var(--green);
+    }
+
+    dialog {
+        color: var(--text-color);
+
+        background: var(--main);
+        border: 1px solid;
+        padding: var(--medium-gap);
+
+        * {
+            font-size: inherit;
+        }
+
+    }
+
+    dialog:not([popover])::backdrop {
+        background-color: #00000077;
+        backdrop-filter: blur(1px);
+        user-select: none;
+        pointer-events: none;
+    }
+
+    dialog[popover] {
+        margin: 0;
+        padding: 0;
+
+        border-radius: var(--border-roundness);
+
+        position-area: block-end;
+        position-try: normal flip-block;
+    }
+
+    mark {
+        background-color: var(--yellow);
+        color: var(--main);
+    }
+
+    :is(input, select):required:invalid {
+        border-color: var(--error);
+    }
+
+    @position-try --bottom-left {
+        top: anchor(bottom);
+        right: anchor(center);
+        position-area: bottom left;
+    }
+
+    [popover="hint"] {
+        position: absolute;
+        position-try-fallbacks: --bottom-left;
+        top: anchor(bottom);
+        left: anchor(center);
+        position-area: bottom right;
+
+        margin: 0;
+        margin-block-start: var(--very-small-gap);
+
+        border: 1px solid currentColor;
+        border-radius: var(--border-roundness);
+        background: var(--text-color);
+        color: var(--main);
+
+        font-style: italic;
+        font-size: 0.8rem;
+    }
+}
+
+@layer utility {
+    .floating {
+        position: absolute;
+        background-color: var(--main);
+        z-index: 100;
+    }
+
+    .delete {
+        color: var(--error);
+        border-color: var(--error);
+    }
+
+    .sticky {
+        position: sticky;
+    }
+
+    .center {
+        text-align: center;
+    }
+
+    .question {
+        text-decoration-style: dashed;
+        cursor: help;
+    }
+
+    .no-select {
+        user-select: none;
+    }
+
+    .margin-center {
+        margin: 0 auto;
+    }
+
+    .toggled {
+        background: var(--highlight);
+        color: var(--main);
+    }
+
+    .styleless-button {
+        background: unset;
+        border: unset;
+        font: inherit;
+        padding: unset;
+
+        &:focus-visible, &:active {
+            outline: 3px solid var(--green);
+            border-color: transparent;
+        }
+    }
+
+    .styleless-button::before,
+    .styleless-button::after {
+        text-decoration: none;
+    }
+
+    button.simple {
+        border: none;
+    }
+
+    p.simple {
+        margin: 0;
+    }
+
+    .bad {
+        --accent-color: var(--pink);
+        color: var(--accent-color);
+    }
+
+    .good {
+        --accent-color: var(--green);
+        color: var(--accent-color);
+    }
+
+    .relative {
+        position: relative
+    }
+
+    .small-gap {
+        gap: var(--small-gap);
+    }
+
+    .x-small-gap {
+        gap: var(--very-small-gap);
+    }
+
+    .flex-column {
+        display: inline-flex;
+        flex-direction: column;
+    }
+
+    .flex {
+        display: flex;
+    }
+
+    .flex.column {
+        flex-direction: column;
+    }
+
+    .flex.row {
+        flex-direction: row;
+    }
+
+    .flex.row-reverse {
+        flex-direction: row-reverse;
+    }
+
+    .flex.wrap {
+        flex-wrap: wrap;
+    }
+
+    .flex.grow {
+        flex-grow: 1;
+    }
+
+    .grid {
+        display: grid;
+    }
+
+    .grid.row {
+        grid-auto-flow: row;
+    }
+
+    .grid.column {
+        grid-auto-flow: column;
+    }
+
+    .flex-row {
+        display: inline-flex;
+    }
+
+    .flex-wrap {
+        flex-wrap: wrap
+    }
+
+    .block {
+        display: block;
+    }
+
+    .inline {
+        display: inline;
+    }
+
+    .none {
+        display: none;
+    }
+
+    .overflow {
+        overflow: auto auto;
+    }
+
+    .float.left {
+        float: left;
+    }
+
+    .float.right {
+        float: right;
+    }
+
+    .j-self-left {
+        justify-self: left;
+    }
+
+    .j-self-right {
+        justify-self: right;
+    }
+
+    .j-space-between {
+        justify-content: space-between;
+    }
+
+    .j-center {
+        justify-content: center;
+    }
+
+    .j-space-evenly {
+        justify-content: space-evenly;
+    }
+
+    .center {
+        text-align: center;
+    }
+
+    .nowrap {
+        text-wrap: nowrap;
+    }
+
+    .m-0 {
+        margin: 0;
+    }
+
+    .p-0 {
+        padding: 0;
+    }
+
+    .m-5 {
+        margin: 5px;
+    }
+
+    .spoiler {
+        color: var(--red);
+        background: var(--red);
+
+        cursor: pointer;
+    }
+
+    .spoiler:active {
+        background: transparent;
+        color: var(--text-color);
+    }
+
+    .small {
+        font-size: 0.8em;
+    }
+}
+
+@layer components {
+    progress:where([data-status="Paused"], [data-status="Waiting"])::-moz-progress-bar,
+    progress:where([data-status="Paused"], [data-status="Waiting"])::-webkit-progress-bar {
+        background: var(--warn);
+    }
+
+    progress[data-status="Dropped"]::-moz-progress-bar,
+    progress[data-status="Dropped"]::-webkit-progress-bar {
+        background: var(--bad);
+    }
+}

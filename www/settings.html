@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Settings</title>
+    <link href="/css/colors.css" rel="stylesheet">
+    <link href="/css/general.css" rel="stylesheet">
+
+    <style>
+        form:has(textarea){
+            display: flex;
+            flex-direction: column;
+        }
+
+        #forms {
+            display: flex;
+            flex-direction: column;
+            gap: var(--small-gap);
+        }
+
+        #templates {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+            gap: calc(var(--small-gap) * 2);
+
+            div {
+                display: grid;
+                grid-template-rows: 1fr 1fr;
+                grid-template-columns: 1fr 1fr;
+
+                textarea {
+                    width: 70vmin;
+                    height: 70vmin;
+                }
+
+                form {
+                    justify-self: end;
+                }
+
+                p {
+                    text-align: center;
+                    grid-column: 1 / -1;
+                }
+
+                .delete {
+                    justify-self: start;
+                }
+
+                button {
+                    width: 5ch;
+                    aspect-ratio: 1;
+                }
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Settings</h1>
+    <p>
+        <a href="/usage/">助けてよ</a>
+    </p>
+
+
+    <section id="forms">
+        <h3>Server Settings</h3>
+
+        <form method="get" action="javascript:void(0)" onsubmit="api_renameAccount(this.elements['new-username'].value).then(res => { if(res.status === 200) alert('successfully changed username') })">
+            <input name="new-username" id="new-username" placeholder="change username">
+            <button>confirm</button>
+        </form>
+
+        <h3>General</h3>
+        <form method="get" action="javascript:void(0)" onchange="done(this)">
+            <input name="setting" value="user_rating_max" type="hidden">
+            <input name="type" value="float" type="hidden">
+            <label>Your max rating <input id="user_rating_max" type="number" name="value"></label>
+        </form>
+
+        <form method="get" action="javascript:void(0)" onchange="done(this)">
+            <input name="setting" value="currency" type="hidden">
+            <label>Default currency <input id="currency" name="value"></label>
+        </form>
+
+        <h3>Startup Script</h3>
+        <form method="get" action="javascript:void(0)" onchange="done(this)">
+            <input name="setting" value="StartupLang" type="hidden">
+            <label for="StartupLang">Startup script language</label>
+            <select id="StartupLang" name="value">
+                <option value="javascript">javascript</option>
+                <option value="aiol">aiol</option>
+            </select>
+        </form>
+
+        <form method="get" action="javascript:void(0)" onchange="done(this)" id="script-form">
+            <input name="setting" value="UIStartupScript" type="hidden">
+            <label for="UIStartupScript">Startup script
+                <textarea id="UIStartupScript" rows="40" cols="80" form="script-form"
+                    name="value"></textarea>
+            </label>
+        </form>
+
+        <h3>Many, Many Templates</h3>
+
+        <section id="templates">
+        </section>
+    </section>
+</body>
+
+<script src="/config.js"></script>
+<script src="/ui/globals.js"></script>
+<script src="/js/api.js"></script>
+<script src="/ui/ui.js"></script>
+<script src="/ui/components.js"></script>
+<script src="/ui/settings.js"></script>
+<script src="/ui/js_api.js"></script>
+
+<script>
+
+    fetch('/ui/html-templates/login-dialog.html')
+        .then(res => res.text())
+        .then(body => {
+            const p = new DOMParser
+            const doc = p.parseFromString(`<body>${body}`, 'text/html')
+            document.body.append(doc.querySelector("template"))
+        })
+
+
+    dom_loadtemplate("alert-box").then(box => {
+        document.body.append(...box.content.childNodes)
+    })
+
+    const urlData = new URLSearchParams(document.location.search)
+    const uid = Number(urlData.get("uid")) || Number(prompt("uid"))
+    const params = new URLSearchParams(location.search)
+    if(!Number(params.get("uid"))) {
+        params.set("uid", uid)
+        location.search = params.toString()
+    }
+
+    const forms = document.getElementById("templates")
+
+    function setupComponentForm(component, defaultTemplate = "") {
+        let form = document.getElementById(`template-${component}`)
+        if(form) {
+            form.querySelector(`[name="value"]`).value = defaultTemplate
+            return
+        } else {
+            form = document.createElement("form")
+        }
+
+        const container = document.createElement("div")
+
+        form.method = "POST"
+        form.id = `template-${component}`
+        form.action = "javascript:void(0)"
+
+        const label = document.createElement("p")
+        label.innerHTML = component
+
+        const edit = document.createElement("button")
+        const dialog  = document.createElement("dialog")
+        edit.onclick = () => {
+            dialog.showModal()
+        }
+        edit.innerHTML  = `✏️`
+
+        const te = document.createElement("textarea")
+        dialog.append(te)
+
+        const settingIn = document.createElement("input")
+        settingIn.name = "setting"
+        settingIn.value = `template-${component}`
+        settingIn.ariaLabel = `html template for ${component}`
+        settingIn.type = 'hidden'
+        te.name = "value"
+        if(defaultTemplate == "") {
+            fetch(`${location.protocol}//${location.host}/ui/html-templates/${component}.html`).then(res => res.text())
+            .then(text => {
+                const p = new DOMParser
+                const d = p.parseFromString(text, "text/html")
+                te.value = d.querySelector("template").innerHTML
+            })
+        } else {
+            te.value = defaultTemplate
+        }
+        te.onchange = function() {
+            done(this.form)
+        }
+        form.append(dialog)
+        form.append(edit, settingIn)
+
+        const del = document.createElement("button")
+        del.classList.add('delete')
+        del.onclick = function() {
+            if(!confirm(`Are you sure you want to delete your customized ${component}`)) return
+            fetch(`${location.protocol}//${location.host}/settings/delete?uid=${uid}&setting=template-${component}`,{
+                method: "DELETE"
+            }).then(res => {
+                if(res.status !== 200) return
+                alert(`${component} setting deleted, reset to default`)
+            })
+        }
+        del.innerText = `🗑`
+
+        container.append(label, form, del)
+        forms.append(container)
+    }
+    for(let component of component_templates.concat(component_shadow_templates).concat(["display-entry"])) {
+        setupComponentForm(component)
+    }
+
+    settings_load(uid).then(settings => {
+            for(let setting in settings) {
+                if(window[setting])
+                    window[setting].value = settings[setting]
+            }
+
+            for(let setting in settings) {
+                if(setting.startsWith("template-")) {
+                    setupComponentForm(setting.split("template-")[1], settings[setting])
+                }
+            }
+    })
+
+    function done(form) {
+        const data = new FormData(form)
+
+        const params = new URLSearchParams({
+            setting: data.get("setting"),
+            value: data.get("value")
+        })
+
+        if(data.has("type")) {
+            params.set("type", data.get("type"))
+        }
+
+        authorizedRequest(`${location.protocol}//${location.host}/settings/set?uid=${uid}`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/x-www-form-urlencoded"
+            },
+            body: params.toString()
+        })
+            .then(res => res.status === 200 ? alert("settings saved") : alert("failed to save settings"))
+    }
+</script>
+
+</html>

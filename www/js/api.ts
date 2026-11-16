@@ -1,0 +1,902 @@
+/**
+ * @module api
+ * aio api functions
+ * requires: ui/globals.ts
+ */
+
+let _api_formats_cache: { [key: number]: string } = {}
+let _api_as_cache: { [key: number]: string } = {}
+
+let _api_types_cache: EntryType[] = []
+
+function logout() {
+    setUserAuth("")
+    localStorage.removeItem("userUID")
+    document.cookie = document.cookie.replace(/\s*login=[^\s]+/, "")
+}
+
+function setUserAuth(auth: string, into: { setItem(key: string, value: any): any } = localStorage) {
+    into.setItem.bind(into)("userAuth", auth)
+}
+
+function getUserAuth(from: { getItem(key: string): string | null } = localStorage) {
+    return from.getItem.bind(from)("userAuth")
+}
+
+function storeUserUID(id: string) {
+    localStorage.setItem("userUID", id)
+}
+
+/**
+ * @returns the signed in user id or 0 if not signed in
+ */
+function getUserUID(): number {
+    return Number(localStorage.getItem("userUID") || "0")
+}
+
+function probablyUserItem(item: object): item is UserEntry {
+    for (let key of [
+        "ItemId",
+        "Status",
+        "ViewCount",
+        "UserRating",
+        "Notes",
+        "CurrentPosition",
+        "Extra"
+    ]) {
+        if (!(key in item)) {
+            return false
+        }
+    }
+    return true
+}
+
+function probablyInfoEntry(item: object): item is InfoEntry {
+    for (let key of [
+        "ItemId",
+        "Collection",
+        "Format",
+        "ArtStyle",
+        "Location",
+        "Native_Title",
+        "Type",
+        "En_Title",
+        "Library",
+    ]) {
+        if (!(key in item)) {
+            return false
+        }
+    }
+    return true
+}
+
+function probablyMetaEntry(item: object): item is MetadataEntry {
+    for (let key of [
+        "ItemId",
+        "Rating",
+        "RatingMax",
+        "Description",
+        "ReleaseYear",
+        "Thumbnail",
+        "MediaDependant",
+        "Datapoints",
+        "Title",
+        "Native_Title",
+        "Provider",
+        "ProviderID",
+    ]) {
+        if (!(key in item)) {
+            return false
+        }
+    }
+    return true
+}
+
+type IdentifyResult = {
+    Description: string
+    Thumbnail: string
+}
+
+type Status = string
+
+function quoteEscape(text: string, stringQuoteType: '"' | "'") {
+    let newText = ""
+    let escaped = false
+    for (let ch of text) {
+        if (ch === "\\") {
+            escaped = true
+        }
+        else if (!escaped && ch === stringQuoteType) {
+            newText += `\\`
+        } else {
+            escaped = false
+        }
+        newText += ch
+    }
+    return newText
+}
+
+function _api_mkStrItemId(jsonl: string) {
+    return jsonl
+        .replace(/"ItemId":\s*(\d+),/, "\"ItemId\": \"$1\",")
+        .replace(/"ParentId":\s*(\d+),/, "\"ParentId\": \"$1\",")
+        .replace(/"CopyOf":\s*(\d+)(,)?/, "\"CopyOf\": \"$1\"$2")
+        .replace(/"Library":\s*(\d+)(,)?/, "\"Library\": \"$1\"$2")
+        .replace(/"Requires":\s*(\d+)(,)?/, "\"Requires\": \"$1\"$2")
+}
+
+function _api_mkIntItemId(jsonl: string) {
+    return jsonl
+        .replace(/"ItemId":"(\d+)",/, "\"ItemId\": $1,")
+        .replace(/"ParentId":"(\d+)",/, "\"ParentId\": $1,")
+        .replace(/"CopyOf":"(\d+)"(,)?/, "\"CopyOf\": $1$2")
+        .replace(/"Library":"(\d+)"(,)?/, "\"Library\": $1$2")
+        .replace(/"Requires":"(\d+)"(,)?/, "\"Requires\": $1$2")
+}
+
+function _api_parseJsonL(jsonl: string) {
+    const bigIntProperties = ["ItemId", "ParentId", "CopyOf", "Library", "Requires", "MetadataId"]
+    try {
+        return JSON.parse(jsonl, (key, v) => {
+            return bigIntProperties.includes(key) && (typeof v === 'number' || typeof v === 'string') ? BigInt(v) : v
+        })
+    }
+    catch (err) {
+        console.error("Could not parse json", err)
+    }
+}
+
+function* api_deserializeJsonl<T>(jsonl: string | string[]): Generator<T> {
+    if (typeof jsonl === 'string') {
+        jsonl = jsonl.split("\n")
+    }
+    for (let line of jsonl) {
+        if(!line) continue
+        yield _api_parseJsonL(line)
+    }
+}
+
+function api_serializeEntry(entry: UserEntry | InfoEntry | MetadataEntry | UserEvent | TransactionEntry) {
+    return JSON.stringify(
+            entry, (_, v) => typeof v === "bigint" ? JSON.rawJSON(v) : v
+        )
+}
+
+function canBegin(status: Status) {
+    return status === "Finished" || status === "Dropped" || status === "Planned" || status === ""
+}
+
+function canPause(status: Status) {
+    return status === "Viewing" || status === "ReViewing"
+}
+
+function canResume(status: Status) {
+    return status === "Paused" || status == "Waiting"
+}
+
+function canWait(status: Status) {
+    return status == "Viewing" || status == "ReViewing"
+}
+
+function api_formatsCache() {
+    return _api_formats_cache
+}
+
+async function api_listArtStyles() {
+    if (Object.keys(_api_as_cache).length > 0) return _api_as_cache
+
+    const res = await fetch(`${apiPath}/type/artstyle`)
+    if (res.status !== 200) return _api_as_cache
+
+    const json = await res.json()
+    return _api_as_cache = json
+}
+
+async function api_listFormats() {
+    if (Object.keys(_api_formats_cache).length > 0) return _api_formats_cache
+
+    const res = await fetch(`${apiPath}/type/format`)
+
+    if (res.status !== 200) {
+        return _api_formats_cache
+    }
+
+    const json = await res.json()
+    _api_formats_cache = json
+    return _api_formats_cache
+}
+
+async function api_listTypes() {
+    if (_api_types_cache.length) return _api_types_cache
+
+    const res = await fetch(`${apiPath}/type/type`)
+    _api_types_cache = await res.json()
+    return _api_types_cache
+}
+
+async function api_getRelations(uid: number) {
+    const res = await api_loadList<{ItemId: bigint, Children: number[], Requires: number[], Copies: number[]}>("entry", uid, {
+        params: new URLSearchParams([["kind", "relations"]])
+    })
+
+    if(!res) {
+        return []
+    }
+    return res
+}
+
+/**
+ * wraps api_streamList into a list and returns that
+ * @param {string} endpoint
+ * @param {number} uid
+ * @param {RequestInit & {params: URLSearchParams}} [init] options for fetch
+ * @reutrns {Promise<T[]>}
+ */
+async function api_loadList<T>(endpoint: string, uid: number, init?: RequestInit & {params: URLSearchParams}): Promise<T[]> {
+    const result = []
+    for await(let res of api_streamList<T>(endpoint, uid, init)) {
+        result.push(res)
+    }
+    return result
+}
+
+/**
+ * Given an endpoint that returns JSONL, yield each line as it comes as an object
+ * @param {string} endpoint
+ * @param {number} uid
+ * @param {RequestInit & {params: URLSearchParams}} [init] options for fetch
+ * @returns {AsyncGenerator<T>}
+ */
+async function* api_streamList<T>(endpoint: string, uid: number, init?: RequestInit & {params: URLSearchParams}): AsyncGenerator<T>{
+    const params = init?.params || new URLSearchParams
+    params.set("uid", uid.toString())
+
+    const res = await fetch(`${apiPath}/${endpoint}?${params.toString()}`, init)
+    if(!res) {
+        return
+    }
+
+    const reader = res.body?.getReader()
+    if(!reader) {
+        return
+    }
+
+    const td = new TextDecoder()
+
+    let curline = ""
+
+    let r
+    while(!(r = await reader.read()).done) {
+        if(r.value.includes(10)) {
+            let cur = r.value.slice(0, r.value.lastIndexOf(10))
+            curline += td.decode(cur)
+            yield* api_deserializeJsonl<T>(curline)
+            curline = td.decode(r.value.slice(r.value.lastIndexOf(10) + 1))
+        } else {
+            curline += td.decode(r.value)
+        }
+    }
+
+    if(curline) {
+        yield* api_deserializeJsonl<T>(curline)
+    }
+}
+
+async function api_copyUserInfo(oldid: bigint, newid: bigint) {
+    return await authorizedRequest(`${apiPath}/engagement/copy?src-id=${oldid}&dest-id=${newid}`, {
+        ["signin-reason"]: "copy user info"
+    }).catch(console.error)
+}
+
+
+async function api_identify(title: string, provider: string) {
+    return await authorizedRequest(`${apiPath}/metadata/identify?title=${encodeURIComponent(title)}&provider=${provider}`)
+}
+
+async function api_finalizeIdentify(identifiedId: string, provider: string, applyTo?: bigint) {
+    identifiedId = encodeURIComponent(identifiedId)
+    provider = encodeURIComponent(provider)
+    if (applyTo)
+        return await authorizedRequest(`${apiPath}/metadata/finalize-identify?identified-id=${identifiedId}&provider=${provider}&apply-to=${applyTo}`)
+    else
+        return await authorizedRequest(`${apiPath}/metadata/finalize-identify?identified-id=${identifiedId}&provider=${provider}`)
+}
+
+async function api_setThumbnail(id: bigint, thumbnail: string) {
+    return await authorizedRequest(`${apiPath}/metadata/set-thumbnail?id=${id}`, {
+        method: "POST",
+        body: thumbnail,
+        "signin-reason": "update thumbnail"
+    })
+}
+
+/**
+ * Sets the parent of id to parent
+ * @param {bigint} id
+ * @param {bigint} parent
+ */
+async function api_setParent(id: bigint, parent: bigint) {
+    return await authorizedRequest(`${apiPath}/mod-entry?id=${id}&parent-id=${parent}`)
+}
+
+async function api_addChild(uid: number, child: bigint, parent: bigint) {
+    return await authorizedRequest(`${apiPath}/add-child?uid=${uid}&child=${child}&parent=${parent}`)
+}
+
+async function api_addCopy(uid: number, copy: bigint, copyof: bigint) {
+    return await authorizedRequest(`${apiPath}/add-copy?uid=${uid}&copy=${copy}&copyof=${copyof}`)
+}
+
+async function api_addRequires(uid: number, itemid: bigint, requires: bigint) {
+    return await authorizedRequest(`${apiPath}/add-requires?uid=${uid}&itemid=${itemid}&requires=${requires}`)
+}
+
+async function api_delChild(uid: number, child: bigint, parent: bigint) {
+    return await authorizedRequest(`${apiPath}/del-child?uid=${uid}&child=${child}&parent=${parent}`)
+}
+
+async function api_delCopy(uid: number, copy: bigint, copyof: bigint) {
+    return await authorizedRequest(`${apiPath}/del-copy?uid=${uid}&copy=${copy}&copyof=${copyof}`)
+}
+
+async function api_delRequires(uid: number, itemid: bigint, requires: bigint) {
+    return await authorizedRequest(`${apiPath}/del-requires?uid=${uid}&itemid=${itemid}&requires=${requires}`)
+}
+
+async function* api_streamQuery(searchString: string, uid: number, version: 3 | 4, orderby: SortKind = ""): AsyncGenerator<InfoEntry> {
+    const params = new URLSearchParams([
+        ["q", searchString],
+    ])
+
+    if(orderby) {
+        const apiOrder = api_uiSort2Api(orderby)
+        if(apiOrder) {
+            params.set("order-by", apiOrder)
+        }
+    }
+
+    if(version === 3) {
+        params.set("v", "3")
+    }
+
+    for await(let info of api_streamList<InfoEntry>("entry", uid, {
+        params,
+        method: "QUERY"
+    })) {
+        yield info
+    }
+}
+
+/**
+ * Performs a v3 or v4 search
+ * @param {string} searchString the search query
+ * @param {string} uid can be 0 to allow results from all users
+ * @param {3 | 4} version the search version
+ * @param {string} [orderby=""]
+ */
+async function api_query(searchString: string, uid: number, version: 3 | 4, orderby: SortKind = ""): Promise<InfoEntry[]> {
+    let apiOrder = api_uiSort2Api(orderby)
+    let qs = `?q=${encodeURIComponent(searchString)}&uid=${uid}`
+    if(apiOrder !== "") {
+        qs += `&order-by=${encodeURIComponent(apiOrder)}`
+    }
+
+    if (version === 3) {
+        qs += "&v=3"
+    }
+
+    const res = await fetch(`${apiPath}/entry${qs}`, {
+        method: "QUERY"
+    }).catch(console.error)
+    if (!res) return []
+
+    let itemsText = await res.text()
+    if (res.status !== 200) {
+        alert(itemsText)
+        return []
+    }
+
+    try {
+        return [...api_deserializeJsonl<InfoEntry>(itemsText.split("\n").filter(Boolean))]
+    } catch (err) {
+        console.error(err)
+    }
+
+    return []
+}
+
+/**
+ * Performs a v4 search
+ * @param {string} searchString the search query
+ * @param {string} uid can be 0 to allow results from all users
+ * @param {string} [orderby=""]
+ */
+async function api_queryV4(searchString: string, uid: number, orderby: SortKind = ""): Promise<InfoEntry[]> {
+    return await api_query(searchString, uid, 4, orderby)
+}
+
+/**
+ * Performs a search
+ * @param {string} searchString - the search query
+ * @param {number} uid - can be 0 to allow results from all users
+ * @param {string} [orderby=""]
+*/
+async function api_queryV3(searchString: string, uid: number, orderby: SortKind = ""): Promise<InfoEntry[]> {
+    return await api_query(searchString, uid, 3, orderby)
+}
+
+async function api_setPos(id: bigint, pos: string) {
+    return authorizedRequest(`${apiPath}/engagement/mod-entry?id=${id}&current-position=${pos}`)
+}
+
+type NewEntryParams = {
+    timezone: string,
+    title: string,
+    type: EntryType,
+    format: number,
+    price?: number,
+    requires?: bigint,
+    "is-digital"?: boolean,
+    "is-anime"?: boolean,
+    "art-style"?: number,
+    "libraryId"?: bigint,
+    "copyOf"?: bigint,
+    "parentId"?: bigint,
+    "native-title": string,
+    "tags"?: string,
+    "location"?: string,
+    "get-metadata"?: boolean,
+    "metadata-provider"?: string,
+    "user-rating"?: number,
+    "user-status"?: UserStatus,
+    "user-view-count"?: number,
+    "user-notes"?: string
+    "metadata-id": bigint
+}
+
+async function api_createEntry(params: NewEntryParams) {
+    let obj: Record<string, string> = {}
+    for(let param in params) {
+        if (params[param as keyof typeof params] === undefined) continue
+        obj[param] = String(params[param as keyof typeof params])
+    }
+    return await authorizedRequest(`${apiPath}/entry`, {
+        body: JSON.stringify(obj),
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json"
+        }
+    })
+}
+
+async function authorizedRequest(url: string | URL, options?: RequestInit & { ["signin-reason"]?: string }): Promise<Response | null> {
+    let userAuth = getUserAuth() || ""
+    options ||= {}
+    options.headers ||= {}
+    if (userAuth == "") {
+        try {
+            userAuth = await signinUI(options?.["signin-reason"] || "")
+        } catch (err) {
+            console.error(err)
+            console.warn("signinUI failed, falling back to shitty solution")
+            const username = prompt("username WARNING: EVERYONE CAN SEE")
+            const password = prompt("password WARNING: EVERYONE CAN SEE")
+            setUserAuth(userAuth = btoa(`${username}:${password}`))
+        }
+    }
+    //@ts-ignore
+    options.headers["Authorization"] = `Basic ${userAuth}`
+    let res = await fetch(url, options)
+    if (res.status === 401) {
+        alert("Unauthorized")
+        return null
+    }
+    return res
+}
+
+async function api_editEvent(eventId: number, name: string, ts?: number, after?: number, tz?: string, before?: number) {
+    const params = new URLSearchParams([
+        ["eventId", String(eventId)],
+        ["name", name],
+    ])
+
+    if(ts != null && !isNaN(ts)) {
+        params.set("timestamp", String(ts))
+    }
+
+    if(after != null && !isNaN(after)) {
+        params.set("after", String(after))
+    }
+
+    if(before != null && !isNaN(before)) {
+        params.set("before", String(before))
+    }
+
+    if(tz != null) {
+        params.set("timezone", tz)
+    }
+
+    return await authorizedRequest(`${apiPath}/engagement/edit-event?${params.toString()}`)
+}
+
+async function api_deleteEventV2(eventId: number, uid: number) {
+    return await authorizedRequest(`${apiPath}/engagement/delete-event-v2?id=${eventId}&uid=${uid}`)
+}
+
+async function api_deleteTransaction(transactionId: number, uid: number) {
+    return await authorizedRequest(`${apiPath}/transact/delete?uid=${uid}&id=${transactionId}`)
+}
+
+async function api_editTransaction(transactionId: number, newData: Partial<TransactionEntry>, uid: number) {
+    const params =new URLSearchParams([
+        ["uid", String(uid)],
+        ["id", String(transactionId)]
+    ])
+
+    for(let key of Object.keys(newData)) {
+        //@ts-ignore
+        params.set(key, newData[key])
+    }
+
+    return await authorizedRequest(`${apiPath}/transact/edit?${params.toString()}`)
+}
+
+async function api_registerEvent(itemId: bigint, name: string, ts: number, after: number, tz?: string, before: number = 0) {
+    tz ||= INTL_OPTIONS.timeZone
+    return await authorizedRequest(`${apiPath}/engagement/register-event?name=${encodeURIComponent(name)}&id=${itemId}&after=${after}&timestamp=${ts}&timezone=${encodeURIComponent(tz)}&before=${before}`)
+}
+
+async function api_addEntryTags(itemId: bigint, tags: string[]) {
+    return await authorizedRequest(`${apiPath}/add-tags?tags=${encodeURIComponent(tags.join("\x1F"))}&id=${itemId}`)
+}
+
+async function api_deleteEntryTags(itemId: bigint, tags: string[]) {
+    return await authorizedRequest(`${apiPath}/delete-tags?tags=${encodeURIComponent(tags.join("\x1F"))}&id=${itemId}`)
+}
+
+async function api_deleteEntry(itemId: bigint) {
+    return await authorizedRequest(`${apiPath}/entry/${itemId}`, {
+        method: "DELETE",
+        "signin-reason": "delete this entry"
+    })
+}
+
+async function api_overwriteMetadataEntry(itemId: bigint, provider?: string) {
+    const params = new URLSearchParams([
+        ["id", String(itemId)],
+    ])
+    if(provider) params.set("provider", provider)
+    return authorizedRequest(`${apiPath}/metadata/fetch?${params.toString()}`, {
+        "signin-reason": "automatically update metadata"
+    })
+}
+
+async function api_updateInfoTitle(itemId: bigint, newTitle: string) {
+    return authorizedRequest(`${apiPath}/mod-entry?id=${itemId}&en-title=${newTitle}`)
+}
+
+async function api_getEntryMetadata(itemId: bigint, uid: number) {
+    let res = await fetch(`${apiPath}/metadata/retrieve?id=${itemId}&uid=${uid}`)
+    if (res.status !== 200) {
+        return null
+    }
+    return api_deserializeJsonl(await res.text()).next().value as MetadataEntry
+}
+
+async function api_getEntryAll(itemId: bigint, uid: number) {
+    let res = await fetch(`${apiPath}/entry/allfor?id=${itemId}&uid=${uid}`)
+    if (res.status !== 200) {
+        return null
+    }
+    const text = await res.text()
+    let inRArray = false
+    const json = JSON.parse(text, (k, v, ctx) => {
+        if(["Children", "Requirements", "Copies"].includes(k)) {
+            inRArray = true
+        } else if(!/^\d+$/.test(k)) {
+            inRArray = false
+        }
+        if(inRArray && /^\d+$/.test(k) || k === "ItemId" || k === "Library") return BigInt(ctx.source)
+        return v
+    })
+    const {
+        User,
+        Meta,
+        Info,
+        Events,
+        Transactions,
+        Children,
+        Copies,
+        Requirements
+    } = json
+    return {
+        user: User,
+        meta: Meta,
+        info: Info,
+        events: Events,
+        transactions: Transactions,
+        children: Children,
+        copies: Copies,
+        requirements: Requirements
+    }
+}
+
+async function api_getEntriesAll(itemIds: bigint[], uid: number): Promise<{
+    user: UserEntry,
+    info: InfoEntry,
+    meta: MetadataEntry,
+    events: UserEvent[],
+    transactions: TransactionEntry[]
+}[] | string>{
+    let res = await fetch(`${apiPath}/get-all-for-entries?uid=${uid}`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+            "ids": itemIds.join(","),
+        })
+    })
+
+    if (res.status !== 200) {
+        return `${res.status}: ${await res.text()}`
+    }
+
+    const text = await res.text()
+    const items = []
+    for(let itemdata of text.split("\n\n")) {
+        if(!itemdata) continue
+
+        const [user, meta, info, ...lists] = itemdata.split("\n").filter(Boolean)
+        const sepPoint = lists.findIndex(v => v === "TRANSACTIONS")
+        const events = lists.slice(0, sepPoint)
+        const transactions = lists.slice(sepPoint + 1)
+        items.push({
+            user: api_deserializeJsonl<UserEntry>(user).next().value,
+            meta: api_deserializeJsonl<MetadataEntry>(meta).next().value,
+            info: api_deserializeJsonl<InfoEntry>(info).next().value,
+            events: [...api_deserializeJsonl<UserEvent>(events)].filter(Boolean),
+            transactions: [...api_deserializeJsonl<TransactionEntry>(transactions)].filter(Boolean)
+        })
+    }
+
+    return items
+}
+
+async function* api_streamEntriesAll(itemIds: bigint[], uid: number): AsyncGenerator<{
+    user: UserEntry,
+    info: InfoEntry,
+    meta: MetadataEntry,
+    events: UserEvent[],
+    transactions: TransactionEntry[]
+}> {
+    if(itemIds.length === 0) return
+    let res = await fetch(`${apiPath}/get-all-for-entries?uid=${uid}`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+            "ids": itemIds.join(","),
+        })
+    })
+
+    if (res.status !== 200) {
+        console.error(`${res.status}: ${await res.text()}`)
+        return {}
+    }
+
+    const reader = res.body?.getReader()
+    if(!reader) {
+        return
+    }
+
+    const td = new TextDecoder()
+
+    let curblock: string[] = []
+    let curline: number[] = []
+
+    let r
+    let potentialblockend = false
+    while(!(r = await reader.read()).done) {
+        for(let ch of r.value) {
+            if(ch == 10) {
+                if(potentialblockend) {
+                    try {
+                        yield {
+                            user: api_deserializeJsonl<UserEntry>(curblock[0]).next().value,
+                            meta: api_deserializeJsonl<MetadataEntry>(curblock[1]).next().value,
+                            info: api_deserializeJsonl<InfoEntry>(curblock[2]).next().value,
+                            events: [...api_deserializeJsonl<UserEvent>(curblock.slice(3, curblock.indexOf("TRANSACTIONS")))],
+                            transactions: [...api_deserializeJsonl<TransactionEntry>(curblock.slice(curblock.indexOf("TRANSACTIONS") + 1))]
+                        }
+                    } catch(err) {}
+                    curblock = []
+                    continue
+                }
+                potentialblockend = true
+                curblock.push(td.decode(Uint8Array.from(curline)))
+                curline = []
+            } else {
+                potentialblockend = false
+                curline.push(ch)
+            }
+        }
+    }
+}
+
+async function api_fetchLocation(itemId: bigint, uid: number, provider?: string, providerId?: string) {
+    let qs = `?uid=${uid}&id=${itemId}`
+    if (provider) {
+        qs += `&provider=${provider}`
+    }
+    if (providerId) {
+        qs += `&provider-id=${providerId}`
+    }
+    return authorizedRequest(`${apiPath}/metadata/fetch-location${qs}`, {
+        "signin-reason": "set location"
+    })
+}
+
+async function api_setItem(subpath: "engagement/" | "metadata/" | "", item: InfoEntry | MetadataEntry | UserEntry, signinReason?: string) {
+    const serialized = api_serializeEntry(item)
+    return authorizedRequest(`${apiPath}/${subpath}set-entry?id=${item.ItemId}`, {
+        body: serialized,
+        method: "POST",
+        "signin-reason": signinReason
+    })
+}
+
+async function api_username2UID(username: string): Promise<number> {
+    let res = await fetch(`${AIO}/account/username2id?username=${encodeURIComponent(username)}`)
+    const n = await res.text()
+    return Number(n.trim())
+}
+
+async function api_setRating(itemId: bigint, rating: string) {
+    return await authorizedRequest(`${apiPath}/engagement/mod-entry?id=${itemId}&rating=${rating}`)
+}
+
+/**
+ * Gets the list of transactions for an item
+ */
+async function api_listTransactions(uid: number, itemId: bigint): Promise<TransactionEntry[]> {
+    const res = await fetch(`${apiPath}/transact/list?uid=${uid}&id=${encodeURIComponent(String(itemId))}`)
+    if (res.status !== 200) {
+        res.text().then(console.error)
+        return []
+    }
+    const text = await res.text()
+    return [...api_deserializeJsonl<TransactionEntry>(text)]
+}
+
+/**
+    * Create a transaction for an item
+    * @param {number} uid user the transaction is for
+    * @param {bigint} itemId item the transaction is for
+    * @param {string} [currency] optionally the currency, defaults to user's preferred currency
+    * @param {string} [tz] timezone, defaults to browser timezone
+    * @param {number} [eventId], optionally an event to attach to the transaction
+*/
+async function api_transact(uid: number, itemId: bigint, price: number, currency?: string, tz?: string, eventId?: number) {
+    tz ||= INTL_OPTIONS.timeZone
+    currency ||= settings_get(uid, "currency")
+    const params = new URLSearchParams({
+        id: String(itemId),
+        price: String(price),
+        currency,
+        timezone: tz
+    })
+
+    if (eventId) {
+        params.set("eventId", String(eventId))
+    }
+
+    return await authorizedRequest(`${apiPath}/transact/do?${params.toString()}`, {
+        ["signin-reason"]: "log a transaction"
+    })
+}
+
+async function api_listAccounts() {
+    const res = await fetch(`${AIO}/account/list`)
+    const users = (await res.text()).split("\n").filter(Boolean)
+    return users
+}
+
+
+async function api_authorized(auth: string): Promise<false | number> {
+    let res = await fetch(`${AIO}/account/authorized`, {
+        headers: {
+            Authorization: `Basic ${auth}`
+        }
+    })
+    if (res.status === 401) {
+        return false
+    }
+
+    let text = await res.text()
+    return Number(text)
+}
+
+let _rec_fetching = false
+async function api_list_recommenders(uid: number): Promise<string[]> {
+    let resolves: ((value: string[] | PromiseLike<string[]>) => void)[] = []
+    if(_rec_fetching) return await new Promise(res => {
+        resolves.push(res)
+    })
+
+    const finishFetch = (result: string[]) => {
+        _rec_fetching = false
+        for(let res of resolves) {
+            res(result)
+        }
+    }
+
+    _rec_fetching = true
+    let res = await fetch(`${apiPath}/recommenders?uid=${encodeURIComponent(uid)}`)
+    if (res.status !== 200) {
+        res.text().then(console.error)
+        setTimeout(() => finishFetch([]), 100)
+        return []
+    }
+
+    let r = (await res.text()).split("\x1F")
+    setTimeout(() => finishFetch([]), 100)
+    return r
+}
+
+type SortKind = "user-title"
+                    | "native-title"
+                    | "rating"
+                    | "general-rating"
+                    | "release-year"
+                    | "cost"
+                    | "added"
+                    | "viewing"
+                    | "finished"
+                    | "item-id"
+                    | "priority"
+                    | "minutes"
+                    | ""
+
+/**
+ * Converts a ui sort kind into a valid sort for a search api
+ */
+function api_uiSort2Api(sort: SortKind) {
+    switch (sort) {
+        case "user-title":
+            return "En_Title"
+        case "native-title":
+            return "entryInfo.Native_Title"
+        case "rating":
+            return "UserRating"
+        case "general-rating":
+            return "(CAST(Rating as REAL) / CAST(RatingMax AS REAL))"
+        case "release-year":
+            return "ReleaseYear"
+        case "cost":
+            return "(SELECT price FROM transactions WHERE price > 0 AND ItemId = userViewingInfo.ItemId ORDER BY price LIMIT 1)"
+        case "added":
+            return "(SELECT timestamp FROM userEventInfo WHERE event = 'Added' AND ItemId = userViewingInfo.ItemId ORDER BY timestamp LIMIT 1)"
+        case "viewing":
+            return "(SELECT timestamp FROM userEventInfo WHERE (event = 'Started' OR event = 'Viewing') AND ItemId = userViewingInfo.ItemId ORDER BY timestamp DESC LIMIT 1)"
+        case "finished":
+            return "(SELECT timestamp FROM userEventInfo WHERE event = 'Finished' AND ItemId = userViewingInfo.ItemId ORDER BY timestamp DESC LIMIT 1)"
+        case "item-id":
+            return "entryInfo.itemId"
+        case "priority":
+            return "entryInfo.priority"
+        case "minutes":
+            return "minutes"
+        //in case the order by doesnt exist on the server
+        default:
+            return ""
+    }
+}
+
+async function api_renameAccount(newName: string) {
+    const params = new URLSearchParams([
+        ["new-username", newName]
+    ])
+    return await authorizedRequest(`${AIO}/account/rename?${params.toString()}`)
+}

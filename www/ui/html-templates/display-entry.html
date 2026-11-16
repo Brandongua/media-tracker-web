@@ -1,0 +1,228 @@
+<template id="display-entry">
+<link rel="stylesheet" href="/ui/templates/display-entry.css">
+<link rel="stylesheet" href="/css/colors.css">
+<link rel="stylesheet" href="/css/general.css">
+
+<style id="custom-styles">
+</style>
+
+<datalist id="recommended-by"></datalist>
+
+<de-template-editor></de-template-editor>
+
+<dialog id="format-settings" popover="auto">
+    <h2 class="center">Format Settings</h2>
+    <menu aria-label="Display and item settings" class="m-0 p-0" id="menu-bar">
+        <select id="type-selector" style="min-width: 50px;"
+            toggle-hint="type-hint"
+            entry-action="settype" entry-action-trigger="change"
+            aria-labelledby="type-hint"> </select>
+        <span id="type-hint" popover='hint'>Media Type</span>
+
+        <select id="format-selector" toggle-hint='format-hint'
+            entry-action="setformat" entry-action-trigger="change"
+            aria-labelledby="format-hint"></select>
+        <span id="format-hint" popover='hint'>Media Format</span>
+
+        <button command="toggle-popover" commandfor="art-styles-menu" style="height: fit-content;">Art Styles</button>
+
+        <format-modifier-popover></format-modifier-popover>
+
+        <button command="toggle-popover" commandfor="format-modifier-selection-popover"  style="height: fit-content;">
+            Format Mods
+        </button>
+    </menu>
+</dialog>
+
+<dialog id="notes-edit-dialog">
+    <p class="center">Notes save automatically</p>
+    <textarea id="notes-edit-box" rows="10" cols="80"></textarea>
+
+    <close-button></close-button>
+</dialog>
+
+<dialog id="display-info-object-editor-popup" style="width: 80vmin; aspect-ratio: 1 / 1;">
+    <div class="flex j-center small-gap">
+        <button id="save-object-editor" style="align-self: center; height: fit-content;"
+            entry-action="saveobject">💾︎</button>
+        <h3 class="center">Object Editor</h3>
+    </div>
+    <div class="center">
+        <select id="current-edited-object">
+            <option value="entry">entry info</option>
+            <option value="user">user info</option>
+            <option value="meta">meta info</option>
+            <option value="user-extra">User Extra</option>
+            <option value="meta-datapoints">Metadata Datapoints</option>
+            <option value="meta-media-dependant">Metadata Media Dependant</option>
+            <option value="aio-web">AIO Web entry options</option>
+        </select>
+    </div>
+    <table id="display-info-object-tbl" style="width: 100%;">
+        <tr>
+            <th style="position: relative;"><button entry-action="newobjectfield" style="position: absolute; left: 0"
+                id="new-user-extra-field">+</button> Name</th>
+            <th>value</th>
+        </tr>
+    </table>
+
+    <close-button></close-button>
+</dialog>
+
+<art-styles-popover></art-styles-popover>
+
+<div class="root" id="root">
+    <div class="grid column x-small-gap"
+        style="
+            width: 100cqi;
+            grid-template-columns: min-content auto 1fr;
+        ">
+        <de-cost-calculation-modifiers>
+        </de-cost-calculation-modifiers>
+
+        <menu aria-label="item interactions" id="item-interaction-menu">
+            <!-- this gets filled with de_item_interaction settings -->
+        </menu>
+
+        <button entry-action="close" class="nowrap" style="justify-self: end">
+            ✗
+        </button>
+    </div>
+
+    <figure class="entry-progress">
+        <div id="multiple-progress">
+        </div>
+    </figure>
+
+    <figure class="thumbnail-fig flex column" id="thumbnail-fig">
+        <div class="center" aria-hidden="true" style="text-box: trim-end text alphabetic;">
+        </div>
+
+        <input type="file" hidden id="thumbnail-file-upload">
+
+        <button class="styleless-button" entry-action="setthumbnail">
+            <img src="" alt="" class="thumbnail" id="thumbnail" loading="lazy">
+        </button>
+
+
+        <table class="media-info" id="media-info"></table>
+
+        <input
+            class="m-0"
+            style="width: 100%;"
+            put-data="Location"
+            put-data-mode="value"
+            placeholder="item location"
+            onchange="updateLocationUI(getIdFromDisplayElement(this), this.value)"
+            oncontextmenu="if(event.ctrlKey) { open(this.value, '_blank'); } else {this.select()} event.preventDefault()">
+
+        <div class="j-center flex wrap center"  id="recommended-bys">
+            <button id="create-recommended-by">+</button>
+        </div>
+
+        <textarea
+            id="style-editor"
+            entry-action="save"
+            entry-action-trigger="change"
+            hidden rows="80" cols="80"
+        ></textarea>
+    </figure>
+
+    <div id="top-line">
+        <hgroup class="flex column center" style="max-width: 50cqb;">
+            <div>
+                <h1 class="m-0 title center inline" id="main-title"></h1>
+                <span id="country-origin"></span>
+                (<span put-data="ItemId" class="small"></span>)
+            </div>
+            <h2 class="m-0 center official-native-title" id="official-native-title"></h2>
+            <div class="flex small-gap wrap j-center">
+                <p class="m-0" put-data="ReleaseYear" put-data-fallback="" style="align-self: center;"></p>
+                <span class="audience-rating" id="audience-rating"  toggle-hint='audience-rating-hint' style="align-self: center;"></span>
+                <span id="audience-rating-hint" popover='hint'>Audience Rating</span>
+            </div>
+        </hgroup>
+
+        <div class="flex column x-small-gap" style="align-items: center;">
+
+            <p class="m-0">
+                A
+                <button id="media-type" popovertarget="format-settings" style="text-box-trim: trim-both"></button>
+                on
+                <button id="on-format" popovertarget="format-settings" style="text-box-trim: trim-both"></button>.
+
+                Rated
+                <button class="rating styleless-button" id="user-rating"
+                    toggle-hint='your-rating-hint'
+                    entry-action="setrating">??</button>,
+                <span id='your-rating-hint' popover='hint'>Your Rating</span>
+                Spent
+                <button class="styleless-button" entry-action="transact"><span class="cost" id="cost"></span></button>,
+                Viewed
+                <button id="view-count" class="view-count styleless-button" entry-action="setviewcount"></button>
+                Times
+                (<button class="styleless-button" id="view-time" entry-action="setviewminutes"></button> hours)
+            </p>
+            <de-status-menu></de-status-menu>
+        </div>
+
+    </div>
+
+    <section id="mid-section">
+        <div class="flex wrap center" style="margin-top: var(--small-gap);">
+            <div class="tags" id="tags">
+                <button id="create-tag" toggle-hint>+ <span popover='hint'>Add Tag</span></button>
+            </div>
+        </div>
+
+        <de-notes></de-notes>
+
+        <div id="description-and-events">
+            <section>
+                <de-description></de-description>
+                <div id="genres" style="margin-bottom: var(--very-small-gap);" class="flex wrap"></div>
+            </section>
+
+            <section>
+                <hr>
+                <div class="tables flex column" id="event-table-area">
+                    <div class="flex j-center" style="position: sticky; top: 0;">
+                        <input type="search" placeholder="filter events" id="user-actions-filter">
+                        <button popout-target="user-actions" class="popout">↗</button>
+                    </div>
+                    <table class="user-actions" id="user-actions"></table>
+                </div>
+            </section>
+        </div>
+
+    </section>
+
+    <div id="relationship-display">
+        <hr>
+        <div class="flex wrap small-gap" style="column-rule: 1px solid;">
+            <de-requirements></de-requirements>
+            <section style="flex-grow: 1;">
+                <h3>Next</h3>
+                <div id="required-by-items">
+                </div>
+                <div>
+                    <button entry-action="newdependant">+</button>
+                    <button entry-action="selectnewdependant">Add Existing</button>
+                </div>
+            </section>
+        </div>
+        <hr>
+        <de-descendants></de-descendants>
+        <hr>
+        <de-copies></de-copies>
+    </div>
+</div>
+
+<template id="tag">
+    <div>
+        <div role="button" class="tag" id="tag-name" tabindex="0">
+             <button class="delete" id="delete-tag" entry-action="deletetag">✗</button>
+        </div>
+    </div>
+</template>
+</template>

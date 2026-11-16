@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<?php include $_SERVER["DOCUMENT_ROOT"] . '/lib/util.php'; ?>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Usage</title>
+    <link rel="stylesheet" href="/css/colors.css">
+    <link rel="stylesheet" href="/css/general.css">
+    <script src="/ui/components.js"></script>
+</head>
+
+<body>
+    <h1>Usage</h1>
+
+    <section>
+        <h3>The Webapp</h3>
+        <p>
+            I would like to keep this brief so:
+            If you would like to know what a button does, hover over it.
+        </p>
+    </section>
+    <hr>
+
+    <section>
+        <h3>Searching</h3>
+            see <a href="<?=get_aio_host()?>/docs#searching">searching docs</a>
+        <p>
+            A regular search may be followed by 1 or more of <code>-&gt;</code> followed by a <a
+                href="#client-filter">client filter</a>
+        <h4 id="client-filter">Client Filters</h4>
+        <p>
+            After a regular search, as many <code>-></code> can be used to apply client filters.
+            The basic client filters include:
+        </P>
+        <ul>
+            <li>head n: get the <code>n</code> top items</li>
+            <li>tail n: get the <code>n</code> bottom items</li>
+            <li>shuf: shuffle the items</li>
+            <li>sort b: sort by <code>b</code> which can be <code>a</code> for alphabetical or <code>e</code> for js
+                eval</li>
+            <li>!child: to ensure the item is not a child</li>
+            <li>!copy: to ensure the item is not a copy</li>
+        </ul>
+        <p>If the filter begins and ends with a <code>/</code> a regex search will be performed</p>
+
+    </section>
+
+    <section>
+        <h3>Url Parameters</h3>
+        <p>
+            the <code>/ui</code> has a few url parameters.
+        </p>
+        <ul>
+            <li>
+                <code>uid</code>: the user's id to display<br>
+                This parameter or <code>uname</code> is required in order to know which user's items to display
+            </li>
+            <li>
+                <code>uname</code>: the username to display
+            </li>
+            <li><code>q</code>: an initial search query</li>
+            <li>
+                <code>item-id</code>: the item id to show (same as <code>?q=ItemId%20=id</code>
+            </li>
+            <li>
+                <code>display</code>: get rid of the ui elements, and display the first result found by <code>q</code>
+                or the item specified by <code>item-id</code>
+            </li>
+            <li><code>catalog</code>: use catalog mode, where the viewing-area is in a seperate window</li>
+            <li><code>view-all</code>: Automatically select all itmes
+        </ul>
+    </section>
+
+    <section>
+        <h3 id="include">Include</h3>
+        <p>
+            In a display entry, include will determine what is included in the events table and total cost
+        </p>
+    </section>
+
+    <hr>
+
+    <section>
+        <h3>Special Paths</h3>
+        <p>There are a couple of paths that can be used as shortcuts</p>
+        <ul>
+            <li><code>/user/{username}</code>: redirects to <code>/ui?uname={username}</code></li>
+            <li><code>/uid/{uid}</code>: redirects to <code>/ui?uid={uid}</code></li>
+            <li><code>/login</code>: performs a basic www-authentication, all url parameters are forwarded to
+                <code>/ui</code>
+            </li>
+            <li><code>/settings.html</code>: user settings editor</li>
+        </ul>
+    </section>
+
+    <hr>
+
+    <section>
+        <h3>Calculator Script</h3>
+        <p> There is a special script that is used in various places.
+            <a href="/usage/calculator-script.html">documentation</a> on said script
+    </section>
+
+    <section>
+        <h3>Display Mode</h3>
+        <p>This mode is a beast, and has a <a href="/usage/display-output.html">dedicated page</a> for documenting it
+    </section>
+
+    <section>
+        <h3>Js API</h3>
+        <a href="/usage/js_api_docs.html">js api docs</a>
+    </section>
+
+</body>
+
+</html>

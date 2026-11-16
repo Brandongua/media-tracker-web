@@ -1,0 +1,87 @@
+<template id="item-card">
+    <link rel="stylesheet" href="/css/colors.css">
+    <link rel="stylesheet" href="/css/general.css">
+    <style>
+        :host(.image-only) :not(:has(picture), picture, picture *, img, p:has([name="username"]), [name="username"]) {
+            display: none;
+        }
+
+        :host {
+            height: 100%;
+        }
+
+        :host([data-view-count="0"]) button {
+            background: var(--error);
+        }
+
+        :host(:not([data-view-count="0"])) button {
+            color: var(--main);
+            background: var(--green);
+        }
+
+        :host(.image-only) button:has(slot[name="thumbnail"]) {
+            flex-grow: 1;
+            picture {
+                height: 100%;
+                display: block;
+            }
+        }
+
+        button {
+            padding: 0.2ch;
+            &:has(slot[name="thumbnail"]) {
+                min-height: 0;
+            }
+            &:has(h2) {
+                display: block;
+                margin-block: var(--very-small-gap);
+                text-align: center;
+            }
+        }
+
+        article {
+            text-align: center;
+            display: grid;
+            height: 100%;
+        }
+
+        picture {
+            align-content: center;
+        }
+
+        ::slotted(img) {
+            /*
+                the img is technically not in the shadow root,
+                thus outside styles have precident,
+                we need this to be more important
+            */
+            max-height: 100% !important;
+            max-width: 100% !important;
+            vertical-align: middle !important;
+
+            box-shadow: 1px 1px 3px var(--shadow-color);
+        }
+
+        h2 {
+            overflow: clip;
+            text-overflow: ellipsis;
+            text-wrap: nowrap;
+        }
+    </style>
+    <article>
+        <p class="m-0"><slot name="username"></slot></p>
+        <button entry-action="openitem" class="styleless-button">
+            <picture>
+                <slot name="thumbnail"></slot>
+            </picture>
+        </button>
+        <button entry-action="openitem" class="styleless-button">
+            <h2 class="m-0"><slot name="title" put-data="En_Title"></slot></h2>
+        </button>
+        <div class="overflow grid column x-small-gap"><slot name="progress"></slot></div>
+        <p class="m-0">
+            <slot name="rating" put-data="UserRating"></slot>
+            (<slot name="view-count" put-data="ViewCount"></slot>)
+        </p>
+    </article>
+</template>

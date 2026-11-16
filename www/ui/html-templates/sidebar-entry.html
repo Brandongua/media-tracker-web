@@ -1,0 +1,18 @@
+<template id="sidebar-entry">
+<div class="root" part="root">
+    <figure>
+        <div class="flex column">
+            <span id="sidebar-item-uid" style="text-align: center;"></span>
+            <button class="styleless-button"><img loading="lazy" part="thumbnail" id="sidebar-thumbnail" class="thumbnail"></button>
+        </div>
+        <div class="flex">
+            <input class="title" id="sidebar-title">
+            <input type="number" put-data="Priority" put-data-mode="value" onchange="
+                let item = items_getEntry(this.getRootNode().host.getAttribute('data-entry-id'));
+                setPropUI(item.info, 'Priority', Number(this.value), 'set priority')
+            " style="field-sizing: content; width: 7ch; border-style: none;" toggle-hint="priority-hint" aria-label="editable priority">
+            <span id='priority-hint' popover='hint'>Priority</span>
+        </div>
+    </figure>
+</div>
+</template>

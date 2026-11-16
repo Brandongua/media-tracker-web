@@ -1,0 +1,29 @@
+<template id="tierlist-template">
+
+<div id="tierlist-output" class="output">
+    <link rel="stylesheet" href="/ui/templates/tierlist.css" defer>
+    <menu aria-label="tierlist controls" style="
+        display: grid;
+        grid-auto-flow: column;
+        gap: var(--small-gap);
+        width: fit-content;
+        column-rule: 1px dashed;
+    ">
+        <select id="tierlist-mode" value="user" style="height: fit-content; align-self: center;">
+            <option value="user">User Rating</option>
+            <option value="general">General Rating</option>
+        </select>
+
+        <textarea id="tierlist-custom" placeholder="Custom tierlist expression"></textarea>
+
+        <button id="export-tierlist">Export</button>
+        as
+        <select id="export-tierlist-as">
+            <option value="application/x-tierlist">.tierlist</option>
+            <option value="application/x-tierlist+xml">.tierlistx</option>
+        </select>
+    </menu>
+    <tier-list class="block">
+    </tier-list>
+</div>
+</template>

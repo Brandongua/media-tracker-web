@@ -1,0 +1,215 @@
+@property --pink {
+    syntax: "<color>";
+    initial-value: #f7c8e0;
+    inherits: true;
+}
+
+@property --green {
+    syntax: "<color>";
+    initial-value: #dfffd8;
+    inherits: true;
+}
+
+@property --light-blue {
+    syntax: "<color>";
+    initial-value: #b4e4ff;
+    inherits: true;
+}
+
+@property --blue {
+    syntax: "<color>";
+    initial-value: #95bdff;
+    inherits: true;
+}
+
+@property --yellow {
+    syntax: "<color>";
+    initial-value: #e5c890;
+    inherits: true;
+}
+
+@property --lavender {
+    syntax: "<color>";
+    initial-value: #b4befe;
+    inherits: true;
+}
+
+@property --red {
+    syntax: "<color>";
+    initial-value: #e78284;
+    inherits: true;
+}
+
+@property --error {
+    syntax: "<color>";
+    initial-value: #e78284;
+    inherits: true;
+}
+
+@property --bad {
+    syntax: "<color>";
+    initial-value: #e78284;
+    inherits: true;
+}
+
+@property --warn {
+    syntax: "<color>";
+    initial-value: #e5c890;
+    inherits: true;
+}
+
+@property --good {
+    syntax: "<color>";
+    initial-value: #dfffd8;
+    inherits: true;
+}
+
+@property --highlight {
+    syntax: "<color>";
+    initial-value: #95bdff;
+    inherits: true;
+}
+
+@property --highlight-text-color {
+    syntax: "<color>";
+    initial-value: #121626;
+    inherits: true;
+}
+
+@property --main {
+    syntax: "<color>";
+    initial-value: #121626;
+    inherits: true;
+}
+
+@property --secondary {
+    syntax: "<color>";
+    initial-value: #333333;
+    inherits: true;
+}
+
+@property --text-color {
+    syntax: "<color>";
+    initial-value: hsl(from var(--main) h s calc(l * 8));
+    inherits: true;
+}
+
+@property --scroll-bar-color {
+    syntax: "<color>";
+    initial-value: #95bdff;
+    inherits: true;
+}
+
+@property --scrollbar-gutter-color {
+    syntax: "<color>";
+    initial-value: #333333;
+    inherits: true;
+}
+
+@property --input-border-roundness {
+    syntax: "<length-percentage>";
+    initial-value: 5px;
+    inherits: true;
+}
+
+@property --medium-gap {
+    syntax: "<length-percentage>";
+    initial-value: 20px;
+    inherits: true;
+}
+
+@property --small-gap {
+    syntax: "<length-percentage>";
+    initial-value: 10px;
+    inherits: true;
+}
+
+@property --very-small-gap {
+    syntax: "<length-percentage>";
+    initial-value: 5px;
+    inherits: true;
+}
+
+@property --inline-widget-margin {
+    syntax: "<length-percentage>";
+    initial-value: 1px;
+    inherits: true;
+}
+
+@property --block-widget-margin {
+    syntax: "<length-percentage>";
+    initial-value: 0px;
+    inherits: true;
+}
+
+:root {
+    /* special custom property values that cant be set in initial-value */
+    --small-gap: 2ex;
+    --very-small-gap: calc(var(--small-gap) / 2);
+    --medium-gap: calc(var(--small-gap) * 2);
+
+    --error: var(--red);
+    --bad: var(--error);
+    --warn: var(--yellow);
+    --good: var(--green);
+    --highlight: var(--blue);
+    --highlight-text-color: var(--main);
+    --scrollbar-bar-color: var(--blue);
+
+    --scrollbar-gutter-color: var(--secondary);
+
+    --mid-section-max-height: 50cqb;
+
+    &:has(option[value="light"]:checked) {
+        --text-color: CanvasText;
+        --main: #eff1f5;
+        --red: #d20f39;
+        --pink: #ea76cb;
+        --green: #40a02b;
+        --light-blue: #04a5e5;
+        --yellow: #df8e1d;
+        --lavender: #7287fd;
+        --blue: #1e66f5;
+    }
+
+    @media (prefers-color-scheme: light) {
+        --text-color: CanvasText;
+        --main: #eff1f5;
+        --red: #d20f39;
+        --pink: #ea76cb;
+        --green: #40a02b;
+        --light-blue: #04a5e5;
+        --yellow: #df8e1d;
+        --lavender: #7287fd;
+        --blue: #1e66f5;
+    }
+
+    &:has(option[value="dark"]:checked) {
+        --main: #121626;
+        --red: #e78284;
+        --lavender: #b4befe;
+        --yellow: #e5c890;
+        --blue: #95bdff;
+        --light-blue: #b4e4ff;
+        --green: #dfffd8;
+        --pink: #f7c8e0;
+        --text-color: hsl(from var(--main) h s calc(l * 8))
+    }
+
+    --secondary: hsl(from var(--main) calc(h - 20) s calc(l * 1.8));
+
+    @supports (color: rgb(calc(sign(1)) 0 0)) {
+        /*oklch doesnt work for some reason*/
+        --secondary: lch(from var(--main) calc(l + (sign(abs(l - 100) - 50) * 20)) c calc(h));
+        --text-color: hsl(from var(--main) h s calc((sign(abs(l - 100) - 30)) * 90));
+    }
+
+
+    --input-background: hsl(from var(--secondary) h s calc(l * 1.1));
+    --input-border-color: currentColor;
+    --border-roundness: var(--input-border-roundness);
+
+    --input-border: 1px solid var(--input-border-color);
+    --input-border-important: 1px solid var(--input-border-color);
+
+}

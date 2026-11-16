@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<section class="js-api-docs">
+    <link rel="stylesheet" href="/css/colors.css">
+    <link rel="stylesheet" href="/css/general.css">
+    <style>
+        * {
+            color: var(--text-color);
+        }
+
+        mark {
+            color: var(--main);
+            background-color: var(--yellow);
+        }
+
+        .function-name.private {
+            font-style: italic;
+            color: var(--error);
+        }
+
+        .function-name.unstable {
+            color: var(--warn);
+        }
+
+        .function-name.deprecated {
+            text-decoration: line-through;
+            text-decoration-color: currentColor;
+            text-decoration-thickness: 0.1em;
+        }
+
+        .function-name span {
+            font-size: 0.8em;
+        }
+
+        .function-name .parameter-name::after {
+            content: ":"
+        }
+
+        .function-name .parameter-type:not(:last-of-type)::after {
+            color: var(--text-color);
+            content: ", "
+        }
+
+        #function-search {
+            font-size: inherit;
+        }
+
+        .unstable::after {
+            content: " (unstable)";
+        }
+
+        .private::after {
+            content: " (private)"
+        }
+
+        .js-api-docs {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 1rem;
+        }
+
+        .js-api-docs h1 {
+            margin-bottom: 0.5rem;
+        }
+
+        .js-api-docs h3 {
+            margin: 1rem 0 0.5rem;
+            padding-bottom: 0.25rem;
+            border-bottom: 2px solid var(--blue);
+        }
+
+        .js-api-docs ul {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr));
+            gap: 0.8rem;
+        }
+
+        .search-container {
+            margin: 1rem 0;
+        }
+
+        .search-input {
+            width: 100%;
+            padding: 0.5rem;
+            background: var(--main);
+            border: 1px solid var(--blue);
+            border-radius: var(--border-roundness);
+            font-family: monospace;
+        }
+
+        .search-input:focus {
+            outline: none;
+            border-color: var(--light-blue);
+        }
+
+        .doc-card {
+            background: var(--main);
+            border: 1px solid var(--blue);
+            border-radius: var(--border-roundness);
+            padding: 0.75rem;
+            height: 100%;
+        }
+
+        .function-name,
+        .event-name {
+            display: block;
+            font-size: 1.1rem;
+            margin: 0;
+            margin-bottom: 0.25rem;
+            color: var(--light-blue);
+        }
+
+        .function-signature {
+            margin: 0;
+            margin-bottom: 0.5rem;
+            font-size: 0.9rem;
+            color: var(--lavender);
+        }
+
+        code {
+            font-weight: 600;
+            font-family: monospace;
+            color: inherit;
+            background: var(--secondary);
+            padding: 0.1rem 0.3rem;
+            border-radius: var(--border-roundness);
+        }
+
+        .function-description {
+            margin: 0;
+            margin-bottom: 0.5rem;
+        }
+
+        .parameters,
+        .return {
+            margin-top: 0.5rem;
+            padding-top: 0.5rem;
+            border-top: 2px solid var(--secondary);
+        }
+
+        :where(.parameters, .return)>h4 {
+            margin: 0 0 0.25rem 0;
+        }
+
+        .parameter-list {
+            display: block;
+        }
+
+        .parameter-item {
+            display: block;
+            margin-bottom: 0.25rem;
+            padding-left: 0.5rem;
+        }
+
+        .return-type,
+        .parameter-type {
+            color: var(--lavender);
+            font-family: monospace;
+            margin-left: 0.25rem;
+        }
+
+        .parameter-description {
+            display: block;
+            margin-top: 0.125rem;
+        }
+
+        .hidden {
+            display: none;
+        }
+    </style>
+    <h1>JavaScript API</h1>
+    <p>The application provides a JavaScript API that can be used to interact with the UI and data.</p>
+    <p>
+        Generally the <code>ui_*</code> functions will have side effects that modify the ui. for pure versions of
+        functions use <code>aio_*</code> functions.
+    </p>
+    <div class="search-container">
+        <input type="text" class="search-input" placeholder="Search functions..." id="function-search">
+    </div>
+    <script>
+        document.getElementById("function-search").addEventListener("input", function (e) {
+            const searchTerm = e.target.value.toLowerCase();
+
+            const functions = document.querySelectorAll(".doc-card");
+            const sections = document.querySelectorAll(".js-api-docs h3");
+            let currentSection = null;
+            let hasVisibleFunctions = false;
+            let sectionHasVisibleFunctions = {};
+
+            functions.forEach(func => {
+                const name = func.querySelector(".function-name code").textContent;
+                const desc = func.querySelector(".function-description")?.textContent || "";
+                const params = func.querySelector(".parameter-description")?.textContent || "";
+                const returns = func.querySelector(".return-type")?.textContent || "";
+                const searchableText = (name + " " + desc + " " + params + " " + returns).toLowerCase();
+                const isVisible = searchableText.includes(searchTerm);
+                func.classList.toggle("hidden", !isVisible);
+                if (isVisible) hasVisibleFunctions = true;
+            });
+
+            // Update section visibility
+            sections.forEach(section => {
+                const sectionName = section.textContent;
+                const nextSection = section.nextElementSibling;
+                if (nextSection && nextSection.tagName === "UL") {
+                    const hasVisible = Array.from(nextSection.children).some(li => !li.classList.contains("hidden"));
+                    section.classList.toggle("hidden", !hasVisible);
+                    nextSection.classList.toggle("hidden", !hasVisible);
+                }
+            });
+        });
+    </script>
+    <section>
+        <h2>API Events</h2>
+        <ul>
+            <li class="doc-card">
+                <p class="function-name">
+                    <code>aio-metadata-loaded</code>
+                </p>
+                <p class="function-description">
+                    Fires at the end of <code>items_refreshMetadata</code>
+                </p>
+            </li>
+            <li class="doc-card">
+                <p class="function-name"><code>aio-search-performed</code></p>
+                <p class="function-description">
+                    Fires at the end of <code>loadSearchUI</code>.
+                    detail contains one item: <code>results: InfoEntry[]</code>
+                </p>
+            </li>
+           <li class="doc-card">
+               <p class="function-name"><code>modes.update-item</code></p>
+               <p class="function-description">Called when updateInfo2() is called, ie: when item(s) are updated</p>
+           </li> 
+        </ul>
+    </section>
+    <section>
+        <h2>API Functions</h2>
+        {{CONTENT}}
+    </section>
+</section>

@@ -1,0 +1,618 @@
+@layer general {
+
+    html,
+    body {
+        height: 100%;
+        margin: 0;
+
+        container: body / inline-size;
+    }
+
+    form {
+        flex-grow: 1;
+        display: flex;
+
+        flex-wrap: wrap;
+    }
+
+    button,
+    input,
+    select {
+        font-family: inherit;
+    }
+
+    select {
+
+        /*webkit detection*/
+        @supports (-webkit-backdrop-filter: blur(1px)) {
+            -webkit-appearance: none;
+        }
+
+        -moz-appearance: auto;
+    }
+
+    table {
+        border-collapse: collapse;
+
+        td,
+        th {
+            border: 1px solid var(--secondary);
+        }
+    }
+}
+
+@layer utility {
+    .grid-row {
+        display: grid;
+        grid-auto-flow: row;
+    }
+
+    .output {
+        overflow: auto;
+        scrollbar-gutter: stable;
+    }
+
+    .close {
+        margin: 20px;
+    }
+
+    .good {
+        color: var(--good);
+    }
+
+    .bad {
+        color: var(--bad);
+    }
+}
+
+@layer components {
+    #main-ui {/* {{{ */
+        height: 100%;
+        flex-grow: 1;
+
+        display: grid;
+
+        gap: var(--small-gap);
+
+        @container body (width >=800px) {
+            grid-template-areas:
+                "form form form"
+                "sidebar main main"
+                "sidebar main main"
+                "statusline statusline statusline";
+            grid-template-columns: max-content 1fr 1fr;
+            grid-template-rows: min-content 1fr 1fr min-content;
+        }
+
+        @container body (width < 800px) {
+            grid-template-rows: min-content min-content 3fr min-content;
+            grid-template-columns: 1fr 1fr 0.5fr;
+            grid-template-areas:
+                "form form form"
+                "sidebar sidebar sidebar"
+                "main main main"
+                "statusline statusline statusline";
+
+            position: relative;
+        }
+
+        &.catalog-mode {
+            grid-template-areas: "form form form" "sidebar sidebar sidebar" "sidebar sidebar sidebar";
+
+            #sidebar {
+                width: 100vw;
+            }
+        }
+
+        &.display-mode {
+            display: block;
+
+            > :not(#viewing-area) {
+                display: none;
+            }
+
+            #viewing-area {
+                height: 100%;
+            }
+        }
+    }/* }}} */
+
+    #transactions-log article {
+        padding: var(--small-gap);
+        border: 1px solid;
+    }
+
+
+    .user-script {
+        border: 1px solid var(--light-blue);
+        padding: 5px;
+        border-radius: var(--border-roundness);
+
+        h3 {
+            cursor: pointer;
+            text-decoration: underline;
+            text-transform: capitalize;
+        }
+    }
+
+    #error:not([data-error]) {
+        display: none;
+    }
+
+    #error[data-error]::before {
+        content: attr(data-error)
+    }
+
+    p:has(#login-reason) {
+        text-align: center;
+    }
+
+    p:has(#login-reason:empty) {
+        display: none;
+    }
+
+    #help-link {
+        text-align: center;
+        display: block;
+        align-content: center;
+        cursor: pointer;
+    }
+
+    #login-link {
+        display: block;
+        align-content: center;
+
+        margin-right: 1ch;
+    }
+
+    #view-all {
+        vertical-align: center;
+    }
+
+    #main {
+        height: 100%;
+        /*DO NOT SET THIS TO FLEX
+            it causes a weird perf bug in chrome where every time anything happens
+            (including the user typing in the input box) it recalculates layout
+
+            the solution was to:
+            set this to clip,
+            remove it's flex status
+            set overflow on #sidebar-items
+            set height on #sidebar-items to 100cqb
+        */
+        overflow: clip;
+    }
+
+
+    #new-entry-button {
+        aspect-ratio: 1;
+        min-width: 40px; /*otherwise this button gets *way* too narrow*/
+    }
+
+    #search-area {
+        grid-area: form;
+
+        text-wrap: nowrap;
+        overflow-x: auto;
+        display: grid;
+        grid-template-columns: min-content 1fr auto min-content;
+        width: 100%;
+
+        border-bottom: 2px solid var(--secondary);
+
+        @container (width < 115ch) {
+            grid-template-areas:
+                "new searching searching"
+                "view-toggle view-toggle view-toggle";
+        }
+
+        @container (width < 600px) {
+            [type="submit"] {
+                display: none;
+            }
+        }
+
+        #sidebar-form {
+            width: 50cqi;
+        }
+
+        #search-autocomplete-box {
+            display: none;
+
+            &:not(:empty) {
+                display: flex;
+                flex-direction: column;
+
+                background: var(--text-color);
+                color: var(--main);
+
+                position-anchor: --search-box;
+                position: absolute;
+
+                top: anchor(bottom);
+            }
+        }
+
+        [name="q"] {
+            flex-grow: 1;
+            anchor-name: --search-box;
+
+            & ~ button[type="submit"] {
+                position: absolute;
+                position-anchor: --search-box;
+                left: anchor(right);
+                bottom: anchor(center);
+                transform: translate(-150%, 50%);
+            }
+        }
+
+        [name="uid"] {
+            max-width: 10ch;
+            width: 10ch;
+        }
+
+        div:has(> [name="sort"]) {
+            flex-shrink: 2;
+            grid-template-rows: 1fr 1fr;
+            width: min(20cqi, 100px);
+
+            @container (width > 900px) {
+                grid-template-columns: 1fr 1fr;
+                grid-template-rows: 1fr;
+                width: 20cqi;
+            }
+        }
+    }
+
+    #result-stats {
+        display: flex;
+        gap: calc(var(--small-gap) / 5);
+        overflow: auto;
+
+        *:not(:last-child) {
+            padding-right: 10px;
+            border-right: 1px dashed currentColor;
+        }
+
+        [data-stat-name="totalCost"]::before {
+            content: "$"
+        }
+
+        [data-stat-name]:not([data-stat-name="totalCost"])::before {
+            content: attr(data-stat-name) ": "
+        }
+    }
+
+    #result-stats::before {
+        content: "Stats";
+        border-right: 1px dashed currentColor;
+        text-align: center;
+
+        padding: 0 10px;
+        align-content: center;
+    }
+
+    #statusline {
+        grid-area: statusline;
+
+        width: 100%;
+        padding-inline: var(--small-gap);
+
+        background: var(--secondary);
+    }
+
+    #viewing-area {
+        container-name: viewing-area;
+        container-type: size;
+        grid-area: main;
+
+        &.catalog-mode {
+            display: none;
+        }
+
+        @container body (width < 800px) {
+            grid-column: 1 / -1;
+            overflow: auto auto;
+        }
+
+        @container body (width >=800px) {
+            grid-area: main;
+        }
+    }
+
+    #calc-output {/* {{{ */
+        width: 100%;
+        height: 100%;
+
+        display: grid;
+        grid-template-rows: min-content min-content 1fr;
+
+        #calc-items {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(33cqi, 1fr));
+        }
+    }/* }}} */
+
+    #graph-output {/* {{{ */
+        width: 100%;
+        height: 100%;
+
+        div:has(> form) {
+            position: sticky;
+            top: 0;
+            align-content: start;
+
+            >* {
+                height: fit-content;
+            }
+        }
+
+        > #graphs {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            width: 100%;
+            height: 100%;
+
+            div {
+                width: 90%;
+            }
+        }
+    }/* }}} */
+
+    #entry-output {/* {{{ */
+        --grid-size: 50%;
+        grid-area: main;
+
+        display: grid;
+        grid-auto-flow: column;
+
+        gap: var(--very-small-gap);
+
+        height: 100%;
+        overflow: auto auto;
+
+        display-entry {
+            width: 80cqi;
+            &:first-child:last-child {
+                width: 100cqi;
+            }
+        }
+    }/* }}} */
+
+    #sidebar {/* {{{ */
+        display: grid;
+        grid-template-rows: auto 1fr;
+
+        grid-area: sidebar;
+        height: 100%;
+        width: 200px;
+
+        resize: horizontal;
+
+        container: sidebar / inline-size;
+
+        &.catalog-mode {
+            width: 100cqi;
+            grid-column: 1 / -1;
+        }
+
+        @container body (width < 800px) {
+            width: 100%;
+            resize: none;
+        }
+
+        #sidebar-navigation {/* {{{ */
+            padding: 5px;
+
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            justify-content: center;
+
+            @container body (width < 800px) {
+                display: flex;
+                justify-content: space-around;
+
+                width: 100cqi;
+
+                :has(> #view-all) {
+                    flex-grow: 0.2;
+                    width: auto;
+                }
+            }
+        }/* }}} */
+        #sidebar-items {/* {{{ */
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 1cap;
+
+            overflow: auto;
+
+            min-height: 10dvh;
+
+            width: 100%;
+
+            sidebary-entry {
+                height: fit-content;
+            }
+
+            @container body (width < 800px) {
+                display: flex;
+                flex-direction: row;
+                min-height: fit-content;
+            }
+        }/* }}} */
+    }/* }}} */
+
+    #script-root {/* {{{ */
+        display: grid;
+        grid-template-areas:
+            "input run-button"
+            "output output";
+
+        grid-template-rows: max-content 1fr;
+        grid-template-columns: 1fr max-content;
+
+        gap: var(--small-gap);
+
+
+        padding: 0 10ch;
+
+        #script-execute {
+            height: 100%;
+            margin-inline: 2ch;
+            align-self: center;
+        }
+
+        #script-execute-output {
+            grid-area: output;
+            widtH: 100%;
+        }
+
+        #script {
+            resize: vertical;
+            grid-area: input;
+        }
+    }/* }}} */
+
+    #gallery-output {/* {{{ */
+        width: 100%;
+
+        #gallery-items {
+            width: 100%;
+            display: flex;
+            flex-wrap: wrap;
+
+            item-card {
+                width: 10cqi;
+                height: 200px;
+            }
+        }
+    }/* }}} */
+
+    #calendar-output {/* {{{ */
+        --months-width: 80cqi;
+
+        width: 100cqi;
+        height: 100cqb;
+
+        &[data-mode="day"] #month-display {
+            display: none;
+        }
+
+        &[data-mode="month"] #cal-canvas {
+            display: none;
+        }
+
+        &[data-mode="month"] #month-display {
+            display: grid;
+            width: 100cqi;
+            overflow: auto;
+
+            @container (width > 1000px) {
+                grid-template-areas: "nav stats"
+                                "calendar stats"
+                                "calculator stats";
+
+                grid-template-columns: 1fr 20cqi;
+                grid-template-rows: 1fr 10fr;
+            }
+            @container (width < 1001px) {
+                grid-template-areas: "nav" "calendar" "stats" "calculator";
+            }
+
+            #month-nav {
+                grid-area: nav;
+
+                display: flex;
+                justify-content: center;
+                justify-items: center;
+                gap: var(--small-gap);
+
+                label {
+                    text-align: center;
+                    align-self: center;
+                }
+                input {
+                    height: fit-content;
+                    align-self: center;
+                }
+
+                button {
+                    width: fit-content;
+                    height: fit-content;
+                    align-self: center;
+
+                    &:first-of-type {
+                        justify-self: right;
+                    }
+
+                    &:last-of-type {
+                        justify-self: left;
+                    }
+                }
+            }
+
+            #month-stats {
+                grid-area: stats;
+
+                position: sticky;
+                right: 0;
+
+                /*otherwise does not scroll to show all events*/
+                height: 100%;
+                
+                #total-events::before {
+                    content: "Event total: "
+                }
+            }
+
+            #months {
+                grid-area: calendar;
+
+                display: flex;
+                flex-direction: column;
+                > .month-grid {
+                    border: 1px solid currentColor;
+                }
+
+                .month-label {
+                    text-align: center;
+                }
+            }
+
+            .month-grid {
+                display: grid;
+                grid-template-columns: repeat(7, 1fr);
+                width: 100%;
+
+                .day {
+                    height: 15cqb;
+                    overflow: auto;
+
+                    display: flex;
+                    flex-direction: column;
+                    gap: var(--small-gap);
+
+                    .event-marker {
+                        button {
+                            color: inherit;
+                        }
+                        &[data-event="Viewing"], &[data-event="Started"] {
+                            background: var(--blue);
+                            color: var(--main);
+                        }
+                        &[data-event="Finished"] {
+                            background: var(--green);
+                            color: var(--main);
+                        }
+                        &[data-event="Dropped"] {
+                            background: var(--red);
+                            color: var(--main);
+                        }
+                    }
+                }
+            }
+        }
+    }/* }}} */
+}

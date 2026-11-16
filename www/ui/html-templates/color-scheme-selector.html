@@ -1,0 +1,52 @@
+<template id="color-scheme-selector">
+    <script>
+        {
+            let urlParams = new URLSearchParams(location.search)
+            const colorSelector = document.querySelector("#color-scheme")
+            if (colorSelector && colorSelector instanceof HTMLSelectElement) {
+                if (urlParams.has("color-scheme")) {
+                    const colorscheme = urlParams.get("color-scheme")
+                    colorSelector.value = colorscheme || ""
+                } else {
+                    if (matchMedia('(prefers-color-scheme: dark)').matches) {
+                        colorSelector.value = "dark"
+                    } else {
+                        colorSelector.value = "light"
+                    }
+                }
+            }
+        }
+
+        function color_scheme_register(name, css_definition) {
+            const opt = document.createElement("option")
+            opt.innerText = name
+            opt.value = name
+            window["color-scheme"].appendChild(opt)
+
+            const style = document.createElement("style")
+
+            style.innerText = `
+                :root:has(#color-scheme > option[value="${name}"]:checked) {
+                    ${css_definition}
+                }
+            `
+
+            document.body.append(style)
+        }
+
+
+        function color_scheme_set_scheme(name) {
+            window['color-scheme'].value = name
+        }
+        /*
+        IMPORTANT:
+        registering dark/light here wont do because ui.ts needs to switch it to
+        dark/light based on the users preferences, which may or may not happen
+        before the themes are registered
+        */
+    </script>
+    <select id="color-scheme" aria-label="color scheme">
+        <option value="light">light</option>
+        <option value="dark">dark</option>
+    </select>
+</template>

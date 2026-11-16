@@ -1,0 +1,122 @@
+<template id="calendar-template">
+<div id="calendar-output" class="output">
+    <div id="month-display">
+        <nav id="month-nav">
+            <input id="event-filter" placeholder="event-filter">
+            <button onclick="mode_setMode('event')">Event Table</button>
+            <label for="time-start">start <input id="time-start" type="date"></label>
+            <button id="month-prev">&lt;</button>
+            <button id="month-next">&gt;</button>
+            <label for="time-end">end <input id="time-end" type="date"></label>
+        </nav>
+        <span id="month-stats">
+            <span id="total-events"></span>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Event</th>
+                        <th>Count</th>
+                        <th>%</th>
+                    </tr>
+                </thead>
+                <tbody id="event-totals">
+                </tbody>
+            </table>
+        </span>
+        <div id="months">
+        </div>
+        <h3>Time Calculator</h3>
+        <form action="javascript:0" onsubmit="_calcTimeDiff.call(this)">
+            <div class="flex wrap small-gap">
+                <div class="flex column">
+                    <div class="flex">
+                        <input type="datetime-local" name="start" placeholder="start time">
+                        <input
+                            placeholder="timezone"
+                            type="text"
+                            name="start-timezone"
+                            list="tz-selector">
+                    </div>
+                    <button onclick="_selectEvent.call(this, 'start')" type="button">
+                        Choose Event
+                    </button>
+                </div>
+
+                <div class="flex column">
+                    <div class="flex">
+                        <input type="datetime-local" name="end" placeholder="end time">
+                        <input
+                            placeholder="timezone"
+                            type="text"
+                            name="end-timezone"
+                            list="tz-selector">
+                    </div>
+
+                    <button onclick="_selectEvent.call(this, 'end')" type="button">
+                        Choose Event
+                    </button>
+                </div>
+            </div>
+            <button>Calculate time diff</button>
+            <br>
+            <output name="time-diff" style="align-self: center;"></output>
+        </form>
+
+        <script>
+            function _calcTimeDiff() {
+                let t1 = this.elements.namedItem("start").value
+                let tz1 = this.elements.namedItem("start-timezone").value
+
+                let t2 = this.elements.namedItem("end").value
+                let tz2 = this.elements.namedItem("end-timezone").value
+
+                const t1Time = Temporal.ZonedDateTime.from(`${t1}[${tz1 || "UTC"}]`)
+                const t2Time = Temporal.ZonedDateTime.from(`${t2}[${tz2 || "UTC"}]`)
+                const since = t2Time.withTimeZone(t1Time.timeZoneId).since(t1Time, {
+                    largestUnit: "years"
+                }).abs()
+                this.elements.namedItem('time-diff').innerHTML = `
+                    ${since.toLocaleString()} In ${t1Time.timeZoneId}
+                `
+            }
+            async function _selectEvent(outputDatetimeLocalName) {
+                const c1 = await fillItemListingUI(
+                    Object.fromEntries(
+                        items_getSelected()
+                            .map(i => [i.ItemId, items_getEntry(i.ItemId)])
+                    )
+                )
+                const item = await selectItemUI({container: c1})
+                if(!item) return
+                const events = findUserEventsById(item)
+                if(!events || !events.length) {
+                    alert("No events")
+                    return
+                }
+
+                let options = {}
+                for(let event of events) {
+                    const el = document.createElement("figure")
+                    el.style.cursor = 'pointer'
+                    el.style.border = '1px solid'
+                    el.innerHTML = `<h3>${event.Event}</h3>
+                    ${items_eventTSHTML(event)}
+                    `
+                    options[event.EventId] = el
+                }
+                const container = fillItemListingArbitraryUI(options)
+
+                const eventId = await selectItemUI({container})
+                const event = events.find(e => e.EventId == eventId)
+                const unix = items_eventTimeEstimate(event)
+                const inst = Temporal.Instant.fromEpochMilliseconds(unix)
+                this.form.elements.namedItem(outputDatetimeLocalName).value =
+                    inst.toString().split(':').slice(0, -1).join(":")
+                this.form.elements
+                    .namedItem(`${outputDatetimeLocalName}-timezone`)
+                    .value = event.TimeZone
+            }
+        </script>
+    </div>
+</div>
+</template>

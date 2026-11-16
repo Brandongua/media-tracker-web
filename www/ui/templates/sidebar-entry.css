@@ -1,0 +1,89 @@
+:host(sidebar-entry) {
+    [data-type-icon]::before {
+        content: attr(data-type-icon) " "
+    }
+
+    [part="root"] {
+        display: flow-root;
+        container-type: inline-size;
+
+        @container body (width < 800px) {
+            width: 25vw;
+            height: min-content;
+            aspect-ratio: initial;
+        }
+    }
+
+    #sidebar-title {
+        width: 100%;
+        font-size: 0.8em;
+        align-self: center;
+
+        border-style: none;
+
+        @container body (width >=800px) {
+            text-align: center;
+        }
+    }
+
+    figure {
+        gap: 0.4em;
+        margin: 0;
+
+        contain: inline-size;
+
+        @container body (width >=800px) {
+            display: grid;
+            justify-items: center;
+        }
+
+        @container body (width < 800px) {
+            display: grid;
+            justify-items: center;
+
+            gap: 0;
+        }
+
+        & > button:first-of-type {
+            min-height: 70cqi;
+            width: fit-content;
+            height: fit-content;
+            padding: 0;
+            border: none;
+            background: transparent;
+
+            @container body (width < 800px) {
+                min-height: revert;
+            }
+        }
+
+        button {
+            align-self: center;
+            width: 90cqi;
+            &:has(img[src=""], img:not([src])) {
+                min-height: 70cqi;
+            }
+        }
+    }
+
+    #sidebar-thumbnail {
+        display: block;
+
+        cursor: pointer;
+        /* set a range instead of specific sizes, so that the image can resize to a good size, and so that the image fits within the size of the sidebar */
+        height: 70cqi;
+        max-width: 95cqi;
+
+        margin: 0 auto;
+
+        object-fit: scale-down;
+
+        @container body (width < 800px) {
+            justify-self: center;
+        }
+    }
+
+    button:focus {
+        outline: auto;
+    }
+}

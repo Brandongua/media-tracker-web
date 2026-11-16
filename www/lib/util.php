@@ -1,0 +1,115 @@
+<?php
+
+$settings = null;
+
+function settingsroot() {
+    $server_settings = parse_ini_file($_SERVER["DOCUMENT_ROOT"] . "/server-config.ini", true);
+    $settings_root = $server_settings["data"]["settings_dir"];
+
+    if (!is_dir($settings_root)) {
+        http_response_code(500);
+        echo "the administrator has not setup the settings_dir or the directory does not exist";
+        exit();
+    }
+
+    return $settings_root;
+}
+
+function tmpl($name) {
+    global $settings;
+
+    if (array_key_exists("HTTP_AUTHORIZATION", $_SERVER)) {
+        if ($settings == null) {
+            $auth = $_SERVER["HTTP_AUTHORIZATION"];
+            $pieces = explode(" ", $auth);
+            $uid = ckauth($pieces[1]);
+            $settings = get_settings((int)$uid);
+        }
+
+        if (array_key_exists("template-$name", $settings)) {
+            echo "<template id='$name'>" . $settings["template-$name"] . "</template>";
+        }
+    }
+    readfile($_SERVER["DOCUMENT_ROOT"] . "/ui/html-templates/$name.html");
+}
+
+function ckauth($auth) {
+    $host = get_aio_host();
+    $opts = array(
+        "http" => array(
+            "method" => "GET",
+            "header" => "Authorization: Basic $auth"
+        )
+    );
+    $context = stream_context_create($opts);
+    $res = file_get_contents("$host/account/authorized", false, $context);
+    if ($res == "") {
+        return false;
+    }
+    return $res;
+}
+
+function get_aio_host() {
+    $server_settings = parse_ini_file($_SERVER["DOCUMENT_ROOT"] . "/server-config.ini", true);
+    $host = $server_settings["aio_limas"]["host"];
+    return $host;
+}
+
+function get_settings($uid, $raw = false) {
+    if(gettype($uid) != 'integer') {
+        return "{}";
+    }
+
+    $root = settingsroot();
+    $data = file_get_contents("$root/$uid/settings.json");
+
+    if($data == "") {
+        return $raw ? "{}" : array();
+    }
+
+    if (!$raw) {
+        return json_decode($data, true);
+    }
+    return $data;
+}
+
+function set_setting($uid, $key, $value) {
+    if(gettype($uid) != 'integer') {
+        return "{}";
+    }
+
+    $root = settingsroot();
+    $settings = get_settings((int)$uid, false);
+
+    $settings["$key"] = $value;
+
+    $data = json_encode($settings);
+
+    if (!is_dir("$root/$uid")) {
+        error_log("MAKING $root/$uid");
+        mkdir("$root/$uid");
+    }
+
+    file_put_contents("$root/$uid/settings.json", $data);
+}
+
+function del_setting($uid, $key) {
+    if(gettype($uid) != 'integer') {
+        return "{}";
+    }
+
+    $root = settingsroot();
+    $settings = get_settings((int)$uid, false);
+
+    unset($settings[$key]);
+
+    $data = json_encode($settings);
+
+    if (!is_dir("$root/$uid")) {
+        error_log("MAKING $root/$uid");
+        mkdir("$root/$uid");
+    }
+
+    file_put_contents("$root/$uid/settings.json", $data);
+}
+?>

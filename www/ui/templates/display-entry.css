@@ -1,0 +1,579 @@
+@layer general, util, components;
+
+@layer general {
+    time[title] {
+        border-bottom: 1px dotted;
+    }
+}
+
+@layer util {
+
+    /*for begin/finish/etc... action buttons*/
+    .action {
+        font-size: 1.2rem;
+        aspect-ratio: 1 / 1;
+        width: 35px;
+    }
+
+    .tag::before {
+        content: "🏷︎ ";
+        line-height: 0;
+    }
+
+    .genre::before {
+        content: "🎭︎ ";
+        line-height: 0;
+    }
+
+    .hamburger-menu {
+        display: flex;
+        flex-direction: row;
+        flex-wrap: wrap;
+
+
+        summary {
+            border: var(--input-border);
+            border-radius: var(--border-roundness);
+            background: var(--input-background);
+
+            padding-inline: 1ch;
+
+            user-select: none;
+
+            &:hover {
+                background: color-mix(in oklab, currentColor 30%, var(--input-background) 70%);
+            }
+
+            &::marker {
+                content: "";
+            }
+        }
+
+        &[open] summary {
+            background: var(--highlight);
+            color: var(--highlight-text-color);
+
+            &::marker {
+                content: "→";
+            }
+        }
+    }
+}
+
+@layer components {
+    :host(display-entry) {
+        flex-grow: 1;
+        /*-10px just incase*/
+        min-width: calc(50cqw - var(--small-gap) - 10px);
+
+        overflow: auto auto;
+
+        max-height: 100%;
+
+        @container (aspect-ratio < 1) {
+            width: 100%;
+        }
+
+        @container (width < 800px) {
+            min-height: 50%;
+        }
+    }
+
+    button[data-view-count="0"] {
+        background: var(--error);
+    }
+
+    button[data-view-count]:not([data-view-count="0"]) {
+        background: var(--green);
+    }
+
+
+    #library {
+        padding-block: 1px;
+    }
+
+    #menu-bar {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        grid-template-rows: repeat(2, 1fr);
+        gap: var(--very-small-gap);
+        align-content: end;
+
+        column-rule: currentColor 1px dashed;
+
+        height: min-content;
+
+        text-wrap: nowrap;
+        text-overflow: ellipsis;
+        overflow: clip;
+
+        select { 
+            width: 15ch;
+            height: fit-content;
+        }
+
+        @container (width < 400px){
+            display: flex;
+            flex-direction: column;
+        }
+    }
+
+    #top-line {
+        align-self: center;
+
+        display: flex;
+
+        flex-wrap: wrap;
+        flex-direction: row;
+
+        gap: var(--very-small-gap);
+
+        justify-content: space-evenly;
+        align-items: center;
+
+        height: fit-content;
+
+        container: top-line / inline-size;
+    }
+
+    #art-selectors {
+        label {
+            text-wrap: nowrap;
+        }
+    }
+
+    #item-interactions {
+        display: grid;
+        grid-auto-flow: row;
+
+        float: left;
+        gap: var(--very-small-gap);
+
+        margin: 0.4em 0 0 0.4em;
+
+        button {
+            aspect-ratio: 1 / 1;
+            height: 35px;
+
+            display: flex;
+            justify-content: space-between;
+        }
+    }
+
+    #root {
+        /* -1px to account for the margin of buttons */
+        width: calc(100% - 1px);
+        height: fit-content;
+        container: entry / inline-size;
+
+        background-color: var(--main);
+
+        color: var(--text-color);
+
+        anchor-name: --root;
+    }
+
+    :has(> #thumbnail) {
+        align-self: center;
+        width: fit-content;
+
+        #thumbnail {
+            max-width: 90cqi;
+            display: block;
+        }
+    }
+
+    #thumbnail-fig {
+        container-type: inline-size;
+        container-name: thumbnail-fig;
+
+        float: left;
+
+        display: flex;
+        flex-direction: column;
+        gap: var(--very-small-gap);
+
+        max-width: 30cqi;
+        width: clamp(20ch, 30cqi, 30ch);
+        margin: 0 var(--small-gap) 0 0;
+
+        /*this way, everything in the middle of the page is cenetered nicely*/
+        /*and the space to the right entirely belongs to the figure*/
+        /* height: 90cqb; */
+
+        font-size: min(1em, 3cqw);
+
+        overflow: auto auto;
+
+        hr {
+            width: 100%;
+            opacity: 50%;
+            border-style: dotted;
+        }
+
+        @container entry (width < 450px) {
+            display: flex;
+            flex-direction: row;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+    }
+
+    #media-info {
+        width: 100%;
+
+        &:not(:has(tbody:has(tr))) {
+            display: none;
+        }
+    }
+
+    #cost::before {
+        content: "$"
+    }
+
+
+    #user-actions-filter {
+        width: 50%;
+        text-align: center;
+    }
+
+    #user-actions {
+        width: 100%;
+        margin: 0 auto;
+
+        text-align: center;
+
+        counter-reset: event-no;
+
+        .grid {
+            grid-template-columns: 20% 1fr;
+        }
+
+        :is(td, th) {
+            padding: 0.5em;
+        }
+
+        :is(td, th) button {
+            width: fit-content;
+            justify-self: center;
+        }
+
+        td:has(button) {
+            text-align: center;
+        }
+
+        tr:has(button:is(:hover, :focus-visible)) {
+            background: var(--secondary);
+        }
+    }
+
+    #event-table-area {
+        flex-grow: 1;
+        text-align: center;
+        display: flow-root;
+        align-self: center;
+        overflow: auto auto;
+        max-height: var(--mid-section-max-height);
+    }
+
+    #actions {
+        justify-content: center;
+
+        --gap-size: var(--very-small-gap);
+
+        /*There are a couple of flexboxes within here to group thigns together*/
+        &.flex,
+        & .flex {
+            gap: var(--gap-size);
+        }
+    }
+
+    #tags {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+
+        /*div containing the tags which includes the new tag button*/
+        *:has(> &:not(:empty)) {
+            gap: 2ch;
+        }
+
+        /*each div in #tags contains a delete button and the tag itself*/
+        &>div {
+            display: flex;
+            text-wrap: nowrap;
+        }
+    }
+
+    #delete-tag {
+        display: none;
+    }
+
+    #tag-name:hover #delete-tag {
+        display: revert;
+    }
+
+    #create-tag {
+        align-self: center;
+        height: fit-content;
+
+        /*the parent that has self, but does not have an element with class=tag*/
+        /*if that matches, add " tag" after #create-tag's text to show that the + mean + tag*/
+        :has(> &):not(:has(.tag)) #create-tag::after {
+            content: " tag";
+        }
+    }
+
+    button:has(~ .tag) {
+        vertical-align: middle;
+    }
+
+    #create-recommended-by {
+        :has(> &):not(:has(.recommender)) #create-recommended-by::after {
+            content: " recommender";
+        }
+    }
+
+    .recommender {
+        span {
+            padding-inline: var(--small-gap);
+        }
+        #delete-recommended-by {
+            display: none;
+        }
+
+        &:hover #delete-recommended-by {
+            display: revert;
+        }
+    }
+
+    #item-interaction-menu {
+        display: grid;
+        grid-auto-flow: column;
+        gap: var(--very-small-gap);
+
+        overflow: auto;
+
+        padding: 0;
+        margin: 0;
+
+        button {
+            text-wrap: nowrap;
+            text-overflow: ellipsis;
+
+            display: flex;
+            gap: 1ch;
+        }
+    }
+
+    #descriptors {
+        display: flex;
+        gap: 2cqi;
+
+        margin-top: var(--small-gap);
+    }
+
+    #descriptors>section {
+        border: 5px solid var(--secondary);
+        border-radius: calc(var(--border-roundness) * 5);
+        flex-grow: 1;
+        min-width: 100px;
+        width: 50%;
+
+        height: 30cqb;
+
+        resize: both;
+        overflow: auto;
+    }
+
+    #relationship-display {
+        flex-wrap: wrap;
+    }
+
+    #relationship-display>section {
+        margin: var(--small-gap) 0;
+
+        width: auto;
+    }
+
+    #description-and-events {
+        display: grid;
+
+        @container (width < 800px) {
+            display: contents;
+        }
+
+        @container (width > 799px) {
+            gap: var(--small-gap);
+            grid-template-columns: 1fr 1fr;
+        }
+    }
+
+    :is(#description, #notes) {
+        overflow: auto auto;
+
+        /*since basically anything can be in these, create a new formatting context
+         * so that overflow doesn't cross into the thumbnail-fig*/
+        display: flow-root;
+
+        max-height: var(--mid-section-max-height);
+
+        padding: 0;
+
+        /*if the image does not have a max width, it will cause overflow*/
+        img {
+            max-width: 100%;
+            height: auto;
+        }
+    }
+
+    section:has(> de-description #description:empty) {
+        display: none;
+    }
+
+    /* if there's no description */
+    #mid-section:has(#description:empty) {
+        /* keep the tags on top with a 2xX grid */
+        display: grid;
+        grid-template-rows: auto 1fr;
+        grid-template-columns: 1fr 1fr;
+
+        div:has(> #tags) {
+            grid-column: 1 / -1;
+        }
+
+        /* otherwise it's going to be a grid, and the table wont be full width */
+        #description-and-events {
+            display: block;
+        }
+    }
+
+    #notes {
+        white-space: pre-wrap;
+
+        &:empty {
+            height: fit-content;
+        }
+    }
+
+
+    hgroup {
+        >* {
+            text-wrap: balance;
+        }
+    }
+
+    #main-title {
+        &[data-owner]::after {
+            font-size: 0.5em;
+            content: "  (owner: " attr(data-owner) ")";
+        }
+    }
+
+    #official-native-title {
+        align-self: center;
+
+        &:empty {
+            display: none;
+        }
+    }
+
+    #multiple-progress {
+        display: flex;
+        gap: var(--small-gap);
+    }
+
+    .entry-progress {
+        position: sticky;
+        top: 0;
+        left: anchor(left);
+
+        margin: 0;
+    }
+
+    de-progress {
+        flex-grow: 1;
+    }
+
+    #identify-items:popover-open {
+        display: flex;
+        flex-wrap: wrap;
+    }
+
+    #edit-notes {
+        height: fit-content;
+        align-self: center;
+    }
+
+    #notes-edit-dialog:popover-open {
+        display: grid;
+        grid-template-rows: min-content 1fr;
+    }
+
+    #notes-edit-box {
+        height: 100%;
+        border: none;
+        margin: 0;
+        display: inline-block;
+    }
+
+    #copies-section  {
+        flex-grow: 1;
+    }
+
+    #required-section {
+        flex-grow: 1;
+    }
+
+    #descendants-section,
+    #required-section,
+    #copies-section {
+        display: flex;
+        flex-direction: column;
+
+        justify-content: center;
+
+        button {
+            height: fit-content;
+            align-self: center;
+        }
+
+        div:first-child {
+            display: flex;
+            gap: var(--small-gap);
+        }
+    }
+
+    #required-by-items,
+    #required-items,
+    #descendants,
+    #copies {
+        display: grid;
+        grid-auto-flow: column;
+        grid-auto-rows: max(15cqb, 100px);
+
+        gap: var(--small-gap);
+        align-items: center;
+        justify-content: start;
+
+        max-height: 15cqb;
+        overflow: auto;
+
+        item-card {
+            min-width: 100px;
+            width: 100px;
+        }
+    }
+
+    #descendants,
+    #copies {
+        width: 100%;
+    }
+
+    @container entry (width < 450px) {
+        #genres {
+            align-items: start;
+            width: 50%;
+        }
+    }
+}

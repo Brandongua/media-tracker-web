@@ -1,0 +1,2406 @@
+type DisplayMode = {
+    displayQueue: InfoEntry[]
+    adding: boolean
+    de_actions: ReturnType<typeof _mkde_actions>
+
+    pinned: Set<bigint>
+
+    clear(): any
+    displayEntryAction(func: (this: DisplayMode, item: InfoEntry, root: ShadowRoot, target: HTMLElement) => any): (target: HTMLElement) => any
+} & Mode
+
+// de_actions is kinda insane
+// this function (_mkde_actions) is unecessary but is here to just allow me to collapse the object away
+// de_actions gets assigned to the DisplayMode prototype
+// each function has the (item, root, target) signature
+// during the construction of an instance, that instance's de_actions property
+// is set to a proxy of the prototype's de_actions that middle-mans the getting
+// of a property from de_actions so that it can apply displayEntryAction to it
+// before returning it.
+// displayEntryAction essentially acts as a decorator in this step that
+// gets the root, and item from just an element (within the shadow root),
+// then calls the original de_actions function
+//
+// Another thing displayEntryAction does is bind the current instance
+// to the function from de_actions that is going to be called.
+//
+// The function that displayEntryAction returns has the 'correct' signature
+// because it lines up with requried by updateDeclarativeDSL
+//
+// Changing the signature of the individual de_acitons would simply result
+// in boiler plate where item, and root are gotten in each individual function.
+// It would still also require having a way to bind the current instance
+// to each individual action, which previously was done by simply just having
+// a de_actions for each instance which felt unecessary, so now we just proxy
+// the prototype!
+//
+// If updateDeclarativeDSL existed from the start, I likely would've chosen the
+// boilerplate, however de_actions came first with it's weird behavior of needing
+// to be attatched to an instance of displaymode, so i don't feel the need
+// to update it
+
+function _mkde_actions() {// {{{
+    /**
+     * Actions can be put onto elements with the entry-action attribute
+     * **this element** refers to the element that the action is on
+     * **current item** refers to the item that the
+         * &lt;display-entry&gt; element parent is displaying
+     */
+    return { //{{{
+        /**
+         * Allows the user to choose a library for this item
+         */
+        chooselibrary: function(item) {
+            const libraries = Object.fromEntries(
+                Object.entries(items_getLibraries())
+                    .map(e => [e[0], items_getEntry(e[1].ItemId)]))
+
+            const container = fillItemListingUI(libraries)
+            const btn = document.createElement("button")
+            btn.value = "-1"
+            btn.innerText = "NO LIBRARY"
+            container.querySelector("button")?.insertAdjacentElement('afterend', btn)
+            selectItemUI({
+                container,
+                onsearch: async function(search) {
+                    let results = await api_queryV4(search, getUidUI())
+                    results = results.filter(v => v.Type == "Library")
+
+                    return fillItemListingUI(Object.fromEntries(
+                        results.map(v => [
+                            String(v.ItemId),
+                            new items_Entry(
+                                v,
+                                findUserEntryById(v.ItemId),
+                                findMetadataById(v.ItemId)
+                            )
+                        ])
+                    ))
+                }
+            }).then(id => {
+                if (!id) return
+                item.Library = id < 0n ? 0n : id
+                return api_setItem("", item, "Set library of item")
+            })
+                .then((res) => {
+                    if (!res) return
+                    updateInfo2({
+                        [String(item.ItemId)]: {
+                            info: item
+                        }
+                    })
+                    alert(`Updated library to ${items_getEntry(item.Library).info.En_Title}`)
+                })
+        },
+
+        /**
+            * Creates a buy/sell transaction.
+        */
+        transact: function(item, _root, target) {
+            const modal = openModalUI("transactions-log", undefined, undefined, this.win)
+
+            if(!modal) return
+
+            modal.querySelector("div")?.replaceChildren(...generateTransactionElementsUI(item.ItemId))
+
+            const onclose = async () => {
+                modal.removeEventListener("close", onclose)
+
+                let rv = modal.returnValue
+                if(!rv) return
+
+                if(!["Purchased", "Sold"].includes(rv)) {
+                    alert(`Transact modal must be one of 'Purchased', 'Sold'`)
+                    return
+                }
+
+                const price = await promptNumber(`${rv === "Purchased" ? "Purchase" : "Sell"} price`, "Not a positive number", nStr => {
+                    let n = Number(nStr)
+                    if(!n) return NaN
+                    if(n < 0) return NaN
+
+                    return n
+                })
+
+                if(!price) {
+                    alert("Cancelled")
+                    return
+                }
+
+                transactUI(item.Uid, item.ItemId, rv as "Purchased" | "Sold", price)
+            }
+            modal.addEventListener("close", onclose)
+        },
+
+        /**
+         * Deletes a tag based on the target's tag-name
+        */
+        deletetag: function(item, _root, target) {
+            const tag = target.getAttribute("tag-name")
+            if (!tag) {
+                console.warn("The target with entry-aciton=deletetag has no tag-name")
+                alert("This button is not hooked up to a tag")
+                return
+            }
+
+            confirmUI(`Are you sure you want to delete the tag: ${tag}`)
+                .then(res => {
+                    if(!res) return
+                    return api_deleteEntryTags(item.ItemId, [tag])
+                })
+                .then(res => {
+                    if (res?.status !== 200) return ""
+                    res.text().then(() => {
+                        item.Tags = item.Tags.filter((t: string) => t != tag)
+                        updateInfo2({
+                            [String(item.ItemId)]: {
+                                info: item
+                            }
+                        })
+                    })
+                })
+
+        },
+
+        /**
+         * deletes a recommender from the list of recommended bys
+         */
+        deleterecommendedby: function(item, _root, target) {
+            const r = target.getAttribute("recommender-idx")
+            if (!r) {
+                console.warn("The target with entry-action=deleterecommendedby has no recommender-idx attribute")
+                alert("This button is not hooked up to a recommender-idx")
+                return
+            }
+
+            let idx = Number(r)
+            const recsAll = items_getRecommendedBy(item.ItemId)
+            let recs = recsAll.filter((_, i) => i !== idx)
+            confirmUI(`Are you sure you want to delete the recommender: ${recsAll[idx]}`)
+                .then(res => {
+                    if(!res) return
+                    item.RecommendedBy = JSON.stringify(recs)
+                    return api_setItem("", item, "Remove recommender")
+                })
+                .then(() => {
+                    updateInfo2({
+                        [String(item.ItemId)]: {
+                            info: item
+                        }
+                    })
+                })
+        },
+
+        /**
+         * Deletes the item
+         */
+        delete: function(item) { return deleteEntryUI(item) },
+
+        /**
+         * Overwrites the metadata
+         */
+        refresh: function(item, root) {return overwriteEntryMetadataUI(root, item) },
+
+        /**
+         * Attempts to set the location
+         */
+        fetchlocation: function(item) {return _fetchLocation.call(this, item.ItemId) },
+
+        /**
+         * Saves changes to styles and the template
+         */
+        save: function(item, root) {return saveItemChanges(root, item.ItemId) },
+
+        /**
+         * Deselects the current item
+         */
+        close: function(item) {return  deselectUI(item)},
+
+        /**
+         * pins/unpins the item
+         */
+        togglepin: function(item, root, target) {
+            if(this.pinned.has(item.ItemId)) {
+                target.classList.remove("toggled")
+                this.pinned.delete(item.ItemId)
+            } else {
+                target.classList.add("toggled")
+                this.pinned.add(item.ItemId)
+            }
+        },
+
+        /**
+         * Creates a copy of the current item
+         */
+        copythis: function(item) { return copyThis.call(this, item)},
+
+        /**
+         * Adds a copy fo the current object. The copy taht is added
+         * is the copy with the id that is the value of this element
+         */
+        selectnewcopy: function(item) {
+            selectItemUI().then(id => {
+                if (!id) {
+                    alert("Could not add copy")
+                    return
+                }
+                api_addCopy(item.Uid, id, item.ItemId).then(() => {
+                    items_addCopy(id, item.ItemId)
+                    updateInfo2({
+                        [String(item.ItemId)]: { info: item },
+                        [String(id)]: { info: findInfoEntryById(id) }
+                    })
+                })
+            })
+        },
+
+        /**
+         * Lets the user identify the metadata for an item
+         */
+        identifymetadata: function(item, root) {
+            itemIdentificationUI(item.ItemId)
+        },
+
+        /**
+         * Adds a child to the current object. The child that is added
+         * is the child with the id that is the value of this element
+         */
+        addchild: function(item, _, target) {
+            if (!("value" in target)) {
+                throw new Error("add child button has no value")
+            }
+
+            let childId = BigInt(String(target.value))
+            let child = findInfoEntryById(childId)
+            api_addChild(item.Uid, childId, item.ItemId).then(() => {
+                items_addChild(child.ItemId, item.ItemId)
+                updateInfo2({
+                    [String(item.ItemId)]: { info: item },
+                    [String(target.value)]: { info: child }
+                })
+            })
+        },
+
+        /**
+         * Lets the user select an item to be added as a requirement of
+         * the current item
+         */
+        selectnewrequirement: function(item ){
+            selectItemUI().then(id => {
+                if (!id) {
+                    alert("Could not add requirement")
+                    return
+                }
+
+                api_addRequires(item.Uid, item.ItemId, id).then(() => {
+                    let requirement = findInfoEntryById(id)
+                    items_addRequires(item.ItemId, id)
+                    updateInfo2({
+                        [String(item.ItemId)]: { info: item },
+                        [String(requirement.ItemId)]: { info: requirement }
+                    })
+                })
+            })
+        },
+
+        /**
+         * Opens the new entry dialog
+         * with requires filled in as the current item
+         */
+        newrequires: function(item ){
+            newEntryDialogUI().then(form => {
+                //@ts-ignore
+                addEventListener("aio-entry-created", (e: CustomEvent) => {
+                    const info: InfoEntry = e.detail
+                    addRequirementUI(item.ItemId, info.ItemId)
+                })
+            })
+            .catch(nop)
+        },
+
+        /**
+         * Opens the new entry dialog
+         * with requires filled in as the current item
+         */
+        newdependant: function(item ){
+            newEntryDialogUI({
+                requires: item.ItemId.toString()
+            })
+        },
+
+        /**
+         * Lets the user select an item to be added as a dependant of
+         * the current item
+         */
+        selectnewdependant: function(item ){
+            selectItemUI().then(id => {
+                if (!id) {
+                    alert("Could not add requirement")
+                    return
+                }
+                addRequirementUI(id, item.ItemId)
+            })
+        },
+
+
+        /**
+         * Lets the user select an item to be added as a child of
+         * the current item
+         */
+        selectnewchild: function(item ){
+            selectItemUI().then(id => {
+                if (!id) {
+                    alert("Could not set child")
+                    return
+                }
+                api_addChild(item.Uid, id, item.ItemId).then(() => {
+                    let child = findInfoEntryById(id)
+                    items_addChild(child.ItemId, item.ItemId)
+                    updateInfo2({
+                        [String(item.ItemId)]: { info: item },
+                        [String(id)]: { info: child }
+                    })
+                })
+            })
+        },
+
+        /**
+         * Creates a new item with the parentId set to the current item
+         */
+        newchild: function(item) {
+            newEntryDialogUI({
+                parentId: item.ItemId.toString()
+            })
+        },
+
+        /**
+         * Sets the requirement
+         */
+        setrequired: function(item) {
+            let id = item.ItemId
+
+            fillItemListingUI(items_getAllMeta())
+            selectItemUI().then(itemid => {
+                itemid ||= 0n
+                let info = findInfoEntryById(id)
+
+                api_setItem("", info, "update the requirement")
+                items_getEntry(id).relations.addRequires(itemid)
+                updateInfo2({
+                    [String(id)]: {
+                        info
+                    }
+                })
+            })
+        },
+
+        /**
+         * Creates a new item with copyOf set to the current item
+         */
+        newcopy: function(item) {
+            newEntryDialogUI({
+                copyOf: item.ItemId.toString()
+            })
+        },
+
+        /**
+         * Opens a note editing menu
+         */
+        editnotes: function(item, root, target) {
+            if(target.hasAttribute("data-editing")) {
+                updateNotesUI(item.ItemId, target.getAttribute("data-editing") as string)
+                target.removeAttribute("data-editing")
+                return
+            }
+
+
+            const noteBox = dom_getelorthrow("#notes", null, root)
+            let te = dom_getel("textarea", this.win.HTMLTextAreaElement, noteBox)
+
+            te = this.win.document.createElement("textarea")
+            const notes = items_getEntry(item.ItemId).user.Notes
+            te.value = notes
+            target.setAttribute("data-editing", notes)
+
+            const quitEditing = (save: boolean) => {
+                target.removeAttribute("data-editing")
+                updateNotesUI(item.ItemId, save ? String(te.value) : notes)
+            }
+
+            te.onchange = quitEditing.bind(this, true)
+            te.style.width = '80%'
+            te.style.height = '10cqb'
+            te.onkeydown = keyE => {
+                if(keyE.key !== "Escape") return
+                keyE.preventDefault()
+                te.onchange = null
+                confirmUI("Would you like to save notes?").then(e => {
+                    if(!e) return 
+                    quitEditing(e === true)
+                })
+            }
+
+            noteBox.replaceChildren(te)
+        },
+
+        /**
+         * Updates the custom styles with the value of this element
+         * **NOTE**: DOES NOT SAVE
+         */
+        updatecustomstyles: function(_item, root, target) {
+            const customStyles = root.getElementById("custom-styles")
+            if (!(customStyles instanceof this.win.HTMLStyleElement)) {
+                throw new Error("custom-styles must be a style element in order to update it")
+            }
+
+            if (!("value" in target)) { throw new Error("style editor must have a value attribute") }
+
+            customStyles.innerText = String(target.value)
+
+        },
+
+        /**
+         * Updates the status of the current item with the value of this element
+         */
+        updatestatus: function(item, _, target) {
+            if (!(target instanceof this.win.HTMLSelectElement)) return
+
+            updateStatusUI(item.ItemId, target.value as UserStatus)
+        },
+
+        /**
+         * Updates the cost, and event list
+         *
+         * This is called togglerelationinclude because it's supposed to be
+         * called by the "include" checkboxes
+         */
+        togglerelationinclude: function(item, root) {
+            updateCostDisplay.call(this, root, item.ItemId)
+            for (let el of root.querySelectorAll("#user-actions")) {
+                if (!(el instanceof this.win.HTMLTableElement)) continue
+                updateEventsDisplay.call(this, root, el, item.ItemId)
+
+                const n = dom_getel("#notes", this.win.HTMLElement, root)
+                if(n)
+                    updateNotesDisplay(root, n, item.ItemId)
+
+                const v = dom_getel("#view-count", this.win.HTMLElement, root)
+                if(v)
+                    updateViewCountDisplay(root, v, item.ItemId)
+
+                const t = dom_getel("#view-time", this.win.HTMLElement, root)
+                if(t) {
+                    updateViewTimeDisplay(root, t, item.ItemId)
+                }
+            }
+        },
+
+        /**
+         * Sets the current object table to the value of this element
+         * Value can be
+         * + user-extra
+         * + meta-datapoints
+         * + meta-media-dependant
+         * + aio-web
+         * + user
+         * + meta
+         * + entry
+         */
+        setobjtable: function(item, root, target) {
+            if (!("value" in target)) {
+                throw new Error("set object table element has no value")
+            }
+
+            const objectTbl = dom_getelorthrow("#display-info-object-tbl", this.win.HTMLTableElement, root)
+            const user = findUserEntryById(item.ItemId)
+            const meta = findMetadataById(item.ItemId)
+            switch (target.value) {
+                case "user-extra":
+                    updateObjectTblUI(JSON.parse(user.Extra), objectTbl)
+                    break
+                case "meta-datapoints":
+                    updateObjectTblUI(JSON.parse(meta.Datapoints), objectTbl)
+                    break
+                case "meta-media-dependant":
+                    updateObjectTblUI(JSON.parse(meta.MediaDependant), objectTbl)
+                    break
+                case "aio-web":
+                    updateObjectTblUI(getAIOWeb(user), objectTbl)
+                    break
+                case "user":
+                    updateObjectTblUI(user, objectTbl)
+                    break
+                case "meta":
+                    updateObjectTblUI(meta, objectTbl)
+                    break
+                case "entry":
+                    updateObjectTblUI(item, objectTbl)
+                    break
+
+            }
+        },
+
+        /**
+         * Toggles the art style of the current item,
+         * the value of this element is used as the art style to toggle
+         */
+        toggleartstyle: function(item, _, target) {
+            if (!("checked" in target)) return
+
+            const as = target.id.slice(3) as ASName
+            if (target.checked) {
+                items_setArtStyle(item, as as ASName)
+            } else {
+                items_unsetArtStyle(item, as)
+            }
+
+            api_setItem("", item).then(() => {
+                alert(target.checked ? `${as} set` : `${as} unset`)
+                updateInfo2({
+                    [String(item.ItemId)]: {
+                        info: item
+                    }
+                })
+            })
+        },
+
+        /**
+         * Sets the thumbnail of the current item to the value of this element
+         */
+        setthumbnail: function(_item, _, target) {
+            const fileUpload = target.getRootNode().getElementById("thumbnail-file-upload")
+            if (!fileUpload || !("value" in fileUpload)) return
+
+            fileUpload.click()
+        },
+
+        /**
+         * Toggles the digitization of the current item based on
+         * the checked state of this element
+         */
+        setdigitization: function(item, _, target) {
+            if (!target || !(target instanceof this.win.HTMLInputElement)) return
+            if (target.checked) {
+                item.Format_Modifiers |= items_F_DIGI_MOD
+            } else if (items_isDigitized(item.Format)) {
+                item.Format_Modifiers -= items_F_DIGI_MOD
+            }
+            setPropUI(item, "Format_Modifiers", item.Format_Modifiers, "set digitization")
+        },
+
+        /**
+         * Toggles a display item with id of the value of
+         * the elem-id attribute on this element
+         */
+        toggle: function(_item, root, elem) {
+            let id = elem.getAttribute("elem-id")
+            if (!id) return
+            let toShow = root.getElementById(id)
+            if (!toShow) return
+            if (toShow instanceof this.win.HTMLDialogElement) {
+                if (toShow.open) {
+                    toShow.close()
+                } else {
+                    toShow.showModal()
+                }
+            } else {
+                toShow.hidden = !toShow.hidden
+            }
+        },
+
+        /**
+         * Sets the format of the current item to the value of this element
+         */
+        setformat: function(item, _, target) {
+            if (!("value" in target)) return
+            api_listFormats().then(formats => {
+                if (!Object.keys(formats).includes(String(target.value))) return
+                item.Format = Number(target.value)
+                api_setItem("", item)
+                    .catch(console.error)
+                    .then(alert.bind(window, `Switched format to: ${formats[Number(target.value)]}`))
+                updateInfo2({
+                    [String(item.ItemId)]: {
+                        info: item
+                    }
+                })
+            })
+        },
+
+        /**
+         * Sets the type of the current item to the value of this element
+         */
+        settype: function(item, _, target) {
+            if (!("value" in target)) return
+            api_listTypes().then(types => {
+                if (!types.includes(target.value as EntryType)) return
+                item.Type = target.value as EntryType
+                api_setItem("", item)
+                    .catch(console.error)
+                    .then(alert.bind(window, `Switched type to: ${target.value}`))
+                updateInfo2({
+                    [String(item.ItemId)]: {
+                        info: item
+                    }
+                })
+            })
+        },
+
+        //TODO: this function is a disaster, each edited object should probably get its own save function
+        /**
+         * Saves the current object table
+         */
+        saveobject: function(item, root) {
+            const tbl = dom_getelorthrow("#display-info-object-tbl", this.win.HTMLTableElement, root)
+
+            const editedObject = dom_getelorthrow("#current-edited-object", this.win.HTMLSelectElement, root)?.value
+
+            let into: Record<string, any> = {}
+            let keyName
+            let endpoint: Parameters<typeof api_setItem>["0"] = ""
+            switch (editedObject) {
+                case "meta":
+                    endpoint = "metadata/"
+                    break
+                case "entry":
+                    endpoint = ""
+                    break
+                case "user":
+                    endpoint = "engagement/"
+                    break
+                case "user-extra":
+                    into = findUserEntryById(item.ItemId) as UserEntry
+                    keyName = "Extra"
+                    endpoint = "engagement/"
+                    break
+                case "meta-datapoints":
+                    into = findMetadataById(item.ItemId) as MetadataEntry
+                    keyName = "Datapoints"
+                    endpoint = "metadata/"
+                    break
+                case "meta-media-dependant":
+                    into = findMetadataById(item.ItemId) as MetadataEntry
+                    keyName = "MediaDependant"
+                    endpoint = "metadata/"
+                    break
+                case "aio-web":
+                    keyName = "_AIOWEB"
+                    endpoint = "engagement/"
+                    break
+                default:
+                    alert(`${editedObject} saving is not implemented yet`)
+                    return
+            }
+
+            const newObj = getObjFromObjEditorUI(tbl, editedObject === "entry" ? ["Tags"] : [])
+
+            if (keyName && keyName !== "_AIOWEB")
+                into[keyName] = JSON.stringify(newObj)
+            else if (keyName === "_AIOWEB") {
+                let user = findUserEntryById(item.ItemId)
+                let extra = JSON.parse(user.Extra || "{}")
+                extra["AIOWeb"] = newObj
+                user.Extra = JSON.stringify(extra)
+                into = user
+                updateInfo2({
+                    [String(item.ItemId)]: { user }
+                })
+            }
+            else into = newObj
+
+            if (editedObject === "entry") {
+                into["Tags"] = findInfoEntryById(into["ItemId"]).Tags
+            }
+
+            const strId = String(item.ItemId)
+            api_setItem(endpoint, into as UserEntry)
+                .then(res => res?.text())
+                .then(console.log)
+                .catch(console.error)
+            if (editedObject === "user-extra" || editedObject === "user") {
+                updateInfo2({
+                    [strId]: { user: into as UserEntry }
+                })
+            } else if (editedObject === "entry") {
+                updateInfo2({
+                    [strId]: { info: into as InfoEntry }
+                })
+            } else if (probablyMetaEntry(into)) {
+                updateInfo2({
+                    [strId]: { meta: into as MetadataEntry }
+                })
+            }
+        },
+
+        /**
+         * Creates a new field in the current object table
+         * **NOTE**: fails if the current object table is one of:
+         * + user
+         * + meta
+         * + entry
+         */
+        newobjectfield: async function (item, root) {
+            const name = await promptUI("Field name")
+            if (!name) return
+
+            const editedObject = dom_getelorthrow("#current-edited-object", this.win.HTMLSelectElement, root)?.value
+
+            //These should not get arbitrary field names
+            if (["user", "meta", "entry"].includes(editedObject)) return
+
+            const obj: any = getCurrentObjectInObjEditor(item.ItemId, root)
+            if (name in obj) return
+
+            obj[name] = ""
+
+            const objectTbl = dom_getelorthrow("#display-info-object-tbl", this.win.HTMLTableElement, root)
+            updateObjectTblUI(obj, objectTbl, false)
+        },
+
+        /**
+         * Toggles the hiddenness of the #style-editor element
+         */
+        editstyles: function(item, root, _elem) {
+            const styleEditor = root.getElementById("style-editor")
+            if (!styleEditor) return
+            if ("value" in styleEditor) {
+                styleEditor.value = getUserExtra(findUserEntryById(item.ItemId), "styles")
+            }
+            styleEditor.hidden = !styleEditor.hidden
+        },
+
+        /**
+         * Toggles the hiddenness of the #template-editor element
+         */
+        edittemplate: function(item, root, _elem) {
+            openModalUI("template-editor-container", root)
+        },
+
+        /**
+         * Opens a preview window to display what the custom template will
+         * look like
+         */
+        previewtemplate: function(item, root) {
+            const templEditor = root.getElementById("template-editor")
+            if (!templEditor || !(templEditor instanceof this.win.HTMLTextAreaElement)) return
+
+            const urlParams = new URLSearchParams(location.search)
+            urlParams.set("item-id", String(item.ItemId))
+            const preview = this.output.ownerDocument.open(location.pathname + "?" + urlParams.toString(), "_blank", "popup=true")
+            if (!preview) return
+
+            preview.onload = () => {
+                preview.document.title = `${item.En_Title} PREVIEW`
+                //this tells the new window that this is the template to use for this item no matter what
+                preview.self.GLOBAL_TEMPLATE = { [`${item.ItemId}`]: templEditor.value }
+            }
+
+            templEditor._updatePreview = templEditor.oninput = () => {
+                preview.self.GLOBAL_TEMPLATE = { [`${item.ItemId}`]: templEditor.value }
+                preview.self.deselectUI(item, false)
+                preview.self.selectUI(item, false)
+            }
+        },
+
+        /**
+         * Copy user info to another item
+         */
+        copyto: async function(item) {
+            let id = await promptNumber("Copy user info to (item id)", "Not a number, mmust be item id number", BigInt)
+            if (id === null) return
+            let idInt = BigInt(id)
+
+            api_copyUserInfo(item.ItemId, idInt)
+                .then(res => res?.text())
+                .then(console.log)
+        },
+
+        /**
+         * Asks the user to set the number of minutes they've spent
+         * on the current item
+         */
+        setviewminutes: async function(item) {
+            let count = await promptNumber("Enter the number of <strong>minutes</strong> you've spent viewing this entry", 'Not a number, minutes spent')
+            if (count === null) return
+
+            setPropUI(findUserEntryById(item.ItemId), "Minutes", count, "set minutes")
+        },
+
+        /**
+         * Asks the user to set the view count of the current item
+         */
+        setviewcount: async function(item) {
+            let count = await promptNumber("New view count", 'Not a number, view count')
+            if (count === null) return
+
+            setPropUI(findUserEntryById(item.ItemId), "ViewCount", count, "set view count")
+        },
+
+        /**
+         * Asks the user to set the current position of the current item
+         */
+        setprogress: async function(item, _root) {
+            await setProgressUI(item.ItemId)
+        },
+
+        /**
+         * Asks teh user to set the rating of the current item
+         */
+        setrating: async function(item) {
+            let user = findUserEntryById(item.ItemId)
+            if (!user) {
+                alert("Failed to get current rating")
+                return
+            }
+            let newRating = await promptUI("New rating")
+            if (!newRating || isNaN(Number(newRating))) {
+                return
+            }
+
+            api_setRating(item.ItemId, newRating)
+                .then(async () => {
+                    let user = findUserEntryById(item.ItemId)
+                    await loadUserEvents(item.Uid)
+                    user.UserRating = Number(newRating)
+                    updateInfo2({
+                        [String(item.ItemId)]: { user, events: findUserEventsById(item.ItemId) }
+                    })
+                })
+                .catch(console.error)
+            api_registerEvent(item.ItemId, `rating-change - ${user?.UserRating} -> ${newRating}`, Date.now(), 0)
+                .then(() => {
+                    reloadEventsUI(item.ItemId)
+                })
+                .catch(console.error)
+        },
+    } as Record<string, (this: DisplayMode, item: InfoEntry, root: ShadowRoot, target: HTMLElement) => any> //}}}
+}// }}}
+
+var DisplayMode: ModeConstructor<DisplayMode> = function(this: DisplayMode, output?: HTMLElement | DocumentFragment, win?: Window & typeof globalThis) {
+    ModePrimitives.setup.call(this, output, win)
+
+    this.pinned = new Set
+    this.displayQueue = []
+
+    this.de_actions = new Proxy(this.de_actions, {
+        get: (target, p, receiver) => {
+            const fn = Reflect.get(target, p, receiver)
+            return this.displayEntryAction(fn)
+        },
+    })
+
+    if (this.output instanceof this.win.HTMLElement) {
+        this.output.addEventListener("scroll", () => {
+            if (!(this.output instanceof this.win.HTMLElement))
+                throw new Error("this.parent mutated into a DocumentFragment when it was previously an HTMLElement")
+
+            if (this.output.scrollHeight - this.output.scrollTop > innerHeight + 1000) return
+
+            if (this.displayQueue.length) {
+                const item = this.displayQueue.shift()
+                if (item?.ItemId) {
+                    renderDisplayItem.call(this, item.ItemId)
+                }
+            }
+        })
+    }
+} as any
+
+DisplayMode.prototype.de_actions = _mkde_actions()
+
+DisplayMode.prototype.mkcontainers = function(this: DisplayMode, into: HTMLElement | DocumentFragment) {
+    const c = this.mkcontainer()
+    into.append(c)
+    return { container: c, output: c }
+}
+
+DisplayMode.prototype.mkcontainer = function(this: DisplayMode,) {
+    const c = this.win.document.createElement("div")
+    c.classList.add("overflow")
+    c.id = 'entry-output'
+    return c
+}
+
+DisplayMode.prototype.displayEntryAction = function(this: DisplayMode, func: (this: DisplayMode, item: InfoEntry, root: ShadowRoot, target: HTMLElement) => any): (target: HTMLElement) => any {
+    return function(this: DisplayMode, target: HTMLElement) {
+        let id = getIdFromDisplayElement(target)
+        let item;
+        (item = findInfoEntryById(id)) && func.call(this, item, target.getRootNode() as ShadowRoot, target)
+    }.bind(this)
+}
+
+DisplayMode.prototype.close = function(this: DisplayMode,) {
+    if (this.container)
+        this.container.remove()
+    else {
+        this.clearSelected()
+        this.clear()
+    }
+    this.displayQueue = []
+    this.adding = false
+}
+
+
+DisplayMode.prototype.add = function(this: DisplayMode, entry: InfoEntry) {
+    const el = renderDisplayItem.call(this, entry.ItemId)
+
+    //shortcut: <c-s-a-MouseLeft>
+    //replicate what happens when the template editor button is clicked
+    //this way if the user locks themselves out of the template editor
+    //they can always do this
+    el.onmousedown = (e) => {
+        if (e.ctrlKey && e.altKey && e.shiftKey && e.button === 0) {
+            e.preventDefault()
+            const toShow = el.shadowRoot?.querySelector("#template-editor-container")
+            if (!toShow || !(toShow instanceof this.win.HTMLElement)) return
+            if (toShow instanceof this.win.HTMLDialogElement) {
+                if (toShow.open) {
+                    toShow.close()
+                } else {
+                    toShow.showModal()
+                }
+            } else {
+                toShow.hidden = !toShow.hidden
+            }
+        }
+    }
+    return el
+}
+
+DisplayMode.prototype.sub = function(this: DisplayMode, entry: InfoEntry) {
+    if(this.pinned.has(entry.ItemId)) return
+
+    removeDisplayItem.call(this, entry.ItemId)
+}
+
+DisplayMode.prototype.chwin = function(this: DisplayMode, win: Window & typeof globalThis) {
+    const newOutput = ModePrimitives.chwin.call(this, win)
+
+    this.output = newOutput
+
+    newOutput.addEventListener("scroll", () => {
+        if (newOutput.scrollHeight - newOutput.scrollTop > innerHeight + 1000) return
+
+        if (this.displayQueue.length) {
+            const item = this.displayQueue.shift()
+            if (item?.ItemId) {
+                renderDisplayItem.call(this, item.ItemId)
+            }
+        }
+    })
+    return newOutput
+}
+
+DisplayMode.prototype.refresh = function(this: DisplayMode, id: bigint) {
+    let el = this.output.querySelector(`display-entry[data-item-id="${id}"]`) as HTMLElement
+    //only refresh if the item is on screen
+    if (el)
+        refreshDisplayItem.call(this, id)
+}
+
+DisplayMode.prototype.addList = function(this: DisplayMode, entry: InfoEntry[]) {
+    this.adding = true;
+    (async () => {
+        await items_getAllForIfNotGotten(entry.map(v => v.ItemId))
+        //We need to keep track of whether or not we're adding so that
+        //it can be canceled
+        //such as in the case when we are still adding, but mode_clearItems()
+        //is called
+        for (let i = 0; i < entry.length && this.adding; i++) {
+            if ("scheduler" in window && i % 10 === 0 && i !== 0) {
+                //@ts-ignore
+                await window.scheduler.yield()
+            } else if (i > 5 && !("scheduler" in window)) {
+                this.displayQueue.push(entry[i])
+            } else {
+                renderDisplayItem.call(this, entry[i].ItemId)
+            }
+        }
+
+        this.adding = false
+    })()
+}
+
+DisplayMode.prototype.subList = function(this: DisplayMode, entry: InfoEntry[]) {
+    const itemIdsToRemove = entry.map(v => v.ItemId)
+    this.displayQueue = this.displayQueue.filter(i => !itemIdsToRemove.includes(i.ItemId))
+
+    for (let item of entry) {
+        this.sub(item)
+    }
+}
+
+DisplayMode.prototype.put = function(this: DisplayMode, html: string | HTMLElement | ShadowRoot) {
+    if(typeof html === 'string' && this.output instanceof this.win.HTMLElement) {
+        this.output.innerHTML += html
+    } else {
+        this.output.append(html)
+    }
+}
+
+DisplayMode.prototype.clearSelected = function(this: DisplayMode,) {
+    this.displayQueue.length = 0
+    this.adding = false
+    // displayEntryIntersected.clear()
+    for (let child of this.output.querySelectorAll("display-entry")) {
+        const itemId = child.getAttribute("data-item-id")
+        if (!itemId) continue
+        if(this.pinned.has(BigInt(itemId))) continue
+        removeDisplayItem.call(this, BigInt(itemId))
+    }
+}
+
+DisplayMode.prototype.clear = function(this: DisplayMode,) {
+    for (let child of this.output.childNodes) {
+        if (child.nodeName === 'DISPLAY-ENTRY') continue
+        child.remove()
+    }
+}
+
+function saveItemChanges(root: ShadowRoot, itemId: bigint) {
+    let userEntry = findUserEntryById(itemId)
+    if (!userEntry) return
+
+    const customStylesElem = root.getElementById("style-editor")
+    const customTemplElem = root.getElementById("template-editor")
+
+    if (customStylesElem && "value" in customStylesElem)
+        setUserExtra(userEntry, "styles", String(customStylesElem.value))
+
+    if (customTemplElem && "value" in customTemplElem) {
+        let val = String(customTemplElem.value).trim()
+        setUserExtra(userEntry, "template", val)
+    }
+
+    api_setItem("engagement/", userEntry)
+        .then(res => res?.text())
+        .then(() => alert("saved user info"))
+        .catch(console.error)
+
+    updateInfo2({
+        [String(itemId)]: {
+            user: userEntry
+        }
+    })
+}
+
+function changeDisplayItemData(this: DisplayMode, item: InfoEntry, user: UserEntry, meta: MetadataEntry, events: UserEvent[], el: HTMLElement) {
+    updateDisplayEntryContents.call(this, item, user, meta, events, el.shadowRoot as ShadowRoot)
+    el.setAttribute("data-item-id", String(item.ItemId))
+}
+
+
+function hookActionButtons(shadowRoot: ShadowRoot, itemId: bigint) {
+
+    let multiActionButton = shadowRoot.querySelector('[data-action="Begin+Pause+Resume"]')
+
+    if (multiActionButton) {
+        multiActionButton.addEventListener("click", _ => {
+            const item = findInfoEntryById(itemId) as InfoEntry
+
+            let user = findUserEntryById(itemId)
+            if (!user) return
+
+            let action = ""
+
+            const tz = INTL_OPTIONS.timeZone
+
+            if (canBegin(user.Status)) {
+                action = "begin"
+            } else if (canResume(user.Status)) {
+                action = "resume"
+            } else if (canPause(user.Status)) {
+                action = "pause"
+            }
+
+            if (!action) {
+                alert("Cannot begin, resume, or pause")
+                return
+            }
+
+            confirmUI(`Are you sure you want to ${action} this entry`)
+                .then((ok) => {
+                    if(!ok) return
+                    return authorizedRequest(`${apiPath}/engagement/${action?.toLowerCase()}-media?id=${user.ItemId}&timezone=${encodeURIComponent(tz)}`)
+                })
+                .then(res => {
+                    if (res && res.status === 200) {
+                        updateStatusDisplay(action, shadowRoot.querySelector("#status-selector"))
+                    } else if (!res) {
+                        alert("Could not update status")
+                        return ""
+                    }
+                    return res.text()
+                })
+                .then(text => {
+                    alert(text)
+
+                    Promise.all([loadUserEvents(getUidUI()), items_refreshUserEntries(getUidUI())]).then(() =>
+                        updateInfo2({
+                            [String(item.ItemId)]: {
+                                user: findUserEntryById(item.ItemId)
+                            }
+                        })
+                    )
+                })
+        })
+    }
+
+    for (let btn of shadowRoot.querySelectorAll("[data-action]") || []) {
+        let action = btn.getAttribute("data-action") as string
+
+        //this action does multiple things
+        if (action?.includes("+")) continue
+
+        btn.addEventListener("click", async (_) => {
+            const item = findInfoEntryById(itemId) as InfoEntry
+            confirmUI(`Are you sure you want to ${action} this entry`)
+                .then(async (ok) => {
+                    if(!ok) return
+                    let queryParams = `?id=${item.ItemId}`
+                    if (action === "Finish") {
+                        let rating = await promptNumber("Rating", "Not a number\nRating")
+                        if (rating !== null) {
+                            queryParams += `&rating=${rating}`
+                        }
+                    }
+
+                    const tz = INTL_OPTIONS.timeZone
+                    return authorizedRequest(`${apiPath}/engagement/${action?.toLowerCase()}-media${queryParams}&timezone=${encodeURIComponent(tz)}`)
+                })
+                .then(res => {
+                    if (res && res.status === 200) {
+                        updateStatusDisplay(action, shadowRoot.querySelector("#status-selector"))
+                    } else if (!res) {
+                        alert("Could not update status")
+                        return ""
+                    }
+                    return res.text()
+                })
+                .then(text => {
+                    alert(text)
+                    Promise.all([loadUserEvents(item.Uid), items_refreshUserEntries(item.Uid)]).then(() =>
+                        updateInfo2({
+                            [String(item.ItemId)]: {
+                                user: findUserEntryById(item.ItemId),
+                                events: findUserEventsById(item.ItemId),
+                            }
+                        })
+                    )
+                })
+
+        })
+    }
+
+
+    const fileUpload = shadowRoot.getElementById("thumbnail-file-upload")
+
+    if (fileUpload instanceof HTMLInputElement && "files" in fileUpload) {
+        fileUpload.onchange = async function(_) {
+            const item = findInfoEntryById(itemId) as InfoEntry
+
+            const reader = new FileReader()
+            const blob = (fileUpload.files)?.[0]
+            if (!blob) return
+            reader.readAsDataURL(blob)
+            reader.onload = () => {
+                if (!reader.result) return
+                let result = reader.result.toString()
+                api_setThumbnail(item.ItemId, result)
+                    .then(() => {
+                        let meta = findMetadataById(item.ItemId)
+                        meta.Thumbnail = result
+                        updateInfo2({
+                            [String(item.ItemId)]: {
+                                meta
+                            }
+                        })
+                    })
+            }
+        }
+    }
+}
+
+
+function whatToInclude(el: ShadowRoot): { include: bigint, recursive: boolean } {
+    const checked = (id: string) => (el.getElementById(`include-${id}-in-cost`) as HTMLInputElement)?.checked
+    let include = 0n
+    if(checked("self")) include |= items_reduce_SELF
+    if(checked("children")) include |= items_reduce_CHILDREN
+    if(checked("copies")) include |= items_reduce_COPIES
+    if(checked("requires")) include |= items_reduce_REQUIRES
+
+    //if this element doesn't exist we always want to include self
+    if(!el.getElementById(`include-self-in-cost`)) {
+        include |= items_reduce_SELF
+    }
+
+    return {
+        include,
+        recursive: checked("recusively")
+    }
+}
+
+function updateNotesDisplay(root: ShadowRoot, notesEl: HTMLElement, itemId: bigint) {
+    const {include, recursive} = whatToInclude(root)
+    let unsafe = settings_get(getUserUID(), "enable_unsafe")
+    const notesL = items_reduce(itemId, include, recursive, (p, c) => {
+        let note = findUserEntryById(c).Notes
+        if(!note) return p
+        let sanitizedNote = parseNotes(note)
+        if(!unsafe) {
+            sanitizedNote = dom_sanitizehtml(sanitizedNote)
+        }
+        return p.concat([[c, sanitizedNote]])
+    }, [] as [bigint, string][])
+    if (notesL.length === 1) {
+        notesEl.innerHTML = notesL[0][1]
+    } else {
+        notesEl.innerHTML = notesL.map(([id, n]) => `<article><h4>${findInfoEntryById(id).En_Title}</h4>${n}</article>`).join("<hr>")
+    }
+}
+
+function updateViewCountDisplay(el: ShadowRoot, viewCountRoot: HTMLElement, itemId: bigint) {
+        const {include, recursive} = whatToInclude(el)
+        viewCountRoot.innerText = String(items_reduce(itemId, include, recursive, (p, c) => p + findUserEntryById(c).ViewCount, 0))
+}
+
+function updateViewTimeDisplay(el: ShadowRoot, viewMinsEl: HTMLElement, itemId: bigint) {
+    const {include, recursive} = whatToInclude(el)
+
+    let totalMins = items_reduce(itemId, include, recursive, (p, c) => {
+        const type = findInfoEntryById(c).Type
+        const user = findUserEntryById(c)
+        let data = findMetadataById(c)
+
+        let mediaDependant
+        try {
+            mediaDependant = JSON.parse(data["MediaDependant"] || "{}")
+        } catch (err) {
+            console.error("Could not parse media dependant meta info json")
+            return p
+        }
+
+        return p + (user.Minutes
+            || Number(user.ViewCount) * Number(mediaDependant[`${type}-length`] || 0))
+
+    }, 0)
+
+    const user = findUserEntryById(itemId)
+
+    viewMinsEl.title = String(totalMins) + " minutes"
+
+    // ONLY if it's include self only
+    if (include === items_reduce_SELF && totalMins > 0 && user.Minutes !== totalMins && getUserExtra(user, "allow-minutes-override") === "true") {
+        user.Minutes = totalMins
+        api_setItem("engagement/", user).then(() => alert(`Updated viewing minutes to: ${totalMins}`))
+    }
+    viewMinsEl.innerText = String((totalMins / 60).toFixed(2))
+}
+
+function updateCostDisplay(this: DisplayMode, el: ShadowRoot, itemId: bigint) {
+    const costEl = el.getElementById("cost")
+    if (!costEl) return
+
+    const info = findInfoEntryById(itemId)
+    if (!info) return
+
+    const { include, recursive } = whatToInclude(el)
+
+    items_loadTransactionsFor(
+        items_reduce<bigint[]>(itemId, include, recursive, (p, c) => (p.push(c), p), []),
+        0,
+        false
+    ).then(() => {
+        costEl.innerText = String(items_calculateCost(itemId, include, recursive))
+    })
+}
+
+async function updateEventsDisplay(this: DisplayMode, el: ShadowRoot, eventsTbl: HTMLTableElement, itemId: bigint, eventFilter = "") {
+
+    const {include, recursive} = whatToInclude(el)
+
+    await items_loadEventsFor(
+        items_reduce<bigint[]>(itemId, include, recursive, (p, c) => (p.push(c), p), []),
+        0,
+        false
+    )
+
+    const eventsToLookAt = items_findAllEvents(itemId, include, recursive)
+        .filter(v => {
+            if (!eventFilter) return true
+            return v.Event.includes(eventFilter) ||
+                findInfoEntryById(v.ItemId).En_Title.includes(eventFilter)
+        })
+        .sort(items_compareEventTiming).reverse()
+
+
+    let hasNonSelfEvent = false
+    let tbodyHTML = ""
+
+
+    for (let event of eventsToLookAt) {
+        if (event.ItemId !== itemId) {
+            hasNonSelfEvent = true
+        }
+    }
+
+    for (let event of eventsToLookAt) {
+        tbodyHTML += `<tr>`
+
+        let associatedTransaction
+        if(event.Event === "Purchased" || event.Event === "Sold") {
+            associatedTransaction = items_getEntry(itemId).getTransactionByEventId(event.EventId)
+        }
+
+        if (hasNonSelfEvent) {
+            if (event.ItemId !== itemId) {
+                tbodyHTML += `<td>${findInfoEntryById(event.ItemId).En_Title}</td>`
+            } else {
+                tbodyHTML += `<td><b>self</b></td>`
+            }
+        }
+
+        let eventNameText = event.Event
+        if (eventNameText.toLowerCase().includes("ending") && getUserUID() !== items_getEntry(event.ItemId).info.Uid) {
+            eventNameText = eventNameText.replace(/(.*)(ending)/i, "<span><span class='spoiler'>$1</span>$2</span>")
+        }
+
+        if(associatedTransaction) {
+            eventNameText += ` (${Math.abs(associatedTransaction.Price)} ${associatedTransaction.Currency})`
+        }
+
+        tbodyHTML += ` <td>
+            <div class="grid column">
+                <div class="flex x-small-gap">
+                    <button class="edit" onclick="openEventEditorUI(${event.ItemId}n, ${event.EventId})">✏</button>
+                    <button class="delete" onclick="deleteEventByEventId(${event.EventId}).then(res => res && reloadEventsUI(${event.ItemId}n))">🗑</button>
+                </div>
+                ${eventNameText}
+            </div>
+        </td>`
+
+        tbodyHTML += `<td>${items_eventTSHTML(event)}</td>`
+    }
+
+    eventsTbl.innerHTML = `
+            <thead>
+                <tr>
+                    ${hasNonSelfEvent ? "<th>For</th>" : ""}
+                    <!-- this nonsense is so that the title lines up with the events -->
+                    <th>
+                        <div class="grid column">
+                            <button onclick="openEventFormUI('${itemId}')" style="justify-self: start;">➕︎</button><span style="text-align: center">Event</span>
+                        </div>
+                    </th>
+                    <th>Time</th>
+                </tr>
+            </thead>
+            <tbody>
+            ${tbodyHTML}
+            </tbody>
+        `
+}
+
+async function createRelationButtons(thisId: bigint, elementParent: HTMLElement, relationGenerator: Generator<items_Entry>, relationType: "descendants" | "copies" | "required-items" | "required-by-items") {
+    var relationships = relationGenerator.toArray()
+    let titles = relationships.map(i => i.info.En_Title)
+
+    relationships = relationships.sort((a, b) => {
+        return (items_sequenceNumberGrabber(a.info.En_Title, titles) || 0) - (items_sequenceNumberGrabber(b.info.En_Title, titles) || 0)
+    })
+
+    const elements = []
+
+    for (let child of relationships) {
+        child = await items_getEntryAny(child.ItemId)
+        let el = createClickableEntryUI(
+            child.ItemId,
+            (_target: HTMLElement, e: Event) => {
+                if(e && "altKey" in e && e.altKey) {
+                    openDisplayWinUI(child.ItemId)
+                } else if(items_isSelected(child.ItemId)) {
+                    dom_getel(`display-entry[data-item-id="${child.ItemId}"]`)?.scrollIntoView({
+                        behavior: "smooth"
+                    })
+                } else {
+                    let res = selectUI(findInfoEntryById(child.ItemId))
+                    res[res.length - 1].scrollIntoView({
+                        behavior: "smooth"
+                    })
+                }
+            }
+        )
+
+        el.setAttribute("data-view-count", String(child.user.ViewCount))
+        elements.push(el)
+
+        el.addEventListener("contextmenu", e => {
+            e.preventDefault()
+            const confirmationText = {
+                "descendants": "Would you like to remove this item as a descendant of it's parent",
+                "copies": "Would you like to remove this item as a copy",
+                "required-items": "Would you like to remove this item as a requirement",
+                "required-by-items": "Would you like to remove this item as a dependant",
+            }
+
+            confirmUI(confirmationText[relationType])
+                .then((ok) => {
+                    if(!ok) return
+                    const [apiFunc, itemsFunc] = ({
+                        "copies": [api_delCopy, items_removeCopy],
+                        "descendants": [api_delChild, items_removeChild],
+                        "required-by-items": [
+                            (uid: number, left: bigint, right: bigint) => api_delRequires(uid, left, right),
+                            (left: bigint, right: bigint) => items_removeRequires(left, right)
+                        ],
+                        "required-items": [
+                            (uid: number, right: bigint, left: bigint) => api_delRequires(uid, left, right),
+                            (right: bigint, left: bigint) => items_removeRequires(left, right)
+                        ],
+                    } as const)[relationType]
+
+                    //since copyof left/right doesn't matter
+                    //we'll just use the left/right for adding a child
+                    apiFunc(child.info.Uid, child.ItemId, thisId).then(() => {
+                        itemsFunc(child.ItemId, thisId)
+                        updateInfo2({
+                            [String(thisId)]: { info: findInfoEntryById(thisId) },
+                            [String(child.ItemId)]: { info: child.info }
+                        })
+                    })
+                })
+        })
+    }
+
+    elementParent.replaceChildren(...elements)
+}
+
+function updateStatusDisplay(newStatus: string, display: HTMLElement) {
+    if (!display || !("value" in display)) return
+
+    display.value = newStatus
+    // statusText.innerText = newStatus
+}
+
+function getCurrentObjectInObjEditor(itemId: bigint, el: ShadowRoot): object {
+    const editedObject = (el.getElementById("current-edited-object") as HTMLSelectElement).value
+    const user = findUserEntryById(itemId) as UserEntry
+    const meta = findMetadataById(itemId) as MetadataEntry
+
+    switch (editedObject) {
+        case "user-extra":
+            return JSON.parse(user.Extra) || {}
+        case "meta-datapoints":
+            return JSON.parse(meta.Datapoints) || {}
+        case "meta-media-dependant":
+            return JSON.parse(meta.MediaDependant) || {}
+        case "aio-web":
+            return getAIOWeb(user)
+        case "user":
+            return user || {}
+        case "meta":
+            return meta || {}
+        case "entry":
+            return findInfoEntryById(itemId) || {}
+        default:
+            return {}
+    }
+}
+
+
+/**
+ * @description updates special-case legacy elements
+ */
+async function updateDisplayEntryContents(this: DisplayMode, item: InfoEntry, user: UserEntry, meta: MetadataEntry, _events: UserEvent[], el: ShadowRoot) {
+    const renderComponent = (query: string,
+        fill: (element: HTMLElement, itemId: bigint) => any) => {
+        for (let l of el.querySelectorAll(query)) {
+            fill(l as HTMLElement, item.ItemId)
+        }
+    }
+
+    //just in case we have generic metadata
+    //if meta is not generic, this operation is cheap, no need for a guard
+    meta = await items_getMetadataById(item.ItemId)
+    user = await items_getUserById(user.ItemId)
+
+    renderComponent("#style-editor", el => {
+        if (!(el instanceof this.win.HTMLTextAreaElement)) return
+        items_getUserById(item.ItemId).then(u => {
+            el.innerHTML = getUserExtra(u, "styles") || ""
+        })
+    })
+
+    renderComponent("#template-editor", el => {
+        if (!(el instanceof this.win.HTMLTextAreaElement)) return
+        items_getUserById(item.ItemId).then(u => {
+            el.innerHTML = getUserExtra(u, "template") || ""
+        })
+    })
+
+    renderComponent("#library", el => {
+        if (!("value" in el)) return
+        if (!item.Library) {
+            el.value = "Library"
+            return
+        }
+        el.value = items_getEntry(item.Library).info.En_Title
+    })
+
+    renderComponent("#recommended-bys", el => {
+        el.querySelectorAll("div").forEach(div => div.remove())
+        let i = 0
+        for (let r of items_getRecommendedBy(item.ItemId)) {
+            const recommender = document.createElement("de-recommender")
+            el.append(recommender)
+
+            const outerBtn = dom_getel(".recommender", this.win.HTMLElement, recommender)
+            if(outerBtn) {
+                outerBtn.onclick = e => {
+                    if(e.target?.id === 'delete-recommended-by') return
+                    ui_search(`recommendedBy ~ '%"${r}"%'`)
+                }
+            }
+
+            const b = dom_getel('[role="button"]', this.win.HTMLElement, recommender)
+            if(!b) continue
+            b.setAttribute("recommender", r)
+            const db = dom_getel("button.delete", this.win.HTMLElement, recommender)
+            if(!db) continue
+            db.setAttribute("recommender-idx", String(i))
+
+            const s = dom_getel("span", this.win.HTMLElement, recommender)
+            if(!s) continue
+            s.append(r)
+            i++
+        }
+    })
+
+    //item item interaction menu
+    renderComponent("#item-interaction-menu", async(el) => {
+        if (!(el instanceof this.win.HTMLElement)) return
+        await settings_load(user.Uid)
+
+        const buttons = settings_get(getUserUID(), "de_item_interactions")
+
+        let btns = []
+
+        for (let btnCls in buttons) {
+            let btnData = buttons[btnCls as keyof typeof buttons]
+            const btn = document.createElement("button")
+            btn.setAttribute("toggle-hint", "")
+
+            if ("text" in btnData) {
+                const txt = document.createElement("span")
+                txt.append(btnData.text)
+                btn.append(txt)
+            }
+
+
+            if ("title" in btnData) {
+                const hint = document.createElement("span")
+                hint.setAttribute("popover", "hint")
+                hint.append(btnData.title)
+                btn.append(hint)
+            }
+
+            if ("shortTitle" in btnData) {
+                const st = document.createElement('span')
+                st.append(btnData.shortTitle)
+                btn.append(st)
+            }
+
+            if ("attributes" in btnData) {
+                for (let attr in btnData.attributes) {
+                    btn.setAttribute(attr, btnData.attributes[attr as keyof typeof btnData.attributes])
+                }
+            }
+
+            if ("action" in btnData) {
+                btn.setAttribute("entry-action", btnData.action)
+            }
+
+            btns.push(btn)
+        }
+
+        el.replaceChildren(...btns)
+    })
+
+    renderComponent("#display-info-object-tbl", objTable => {
+        if (!(objTable instanceof this.win.HTMLTableElement)) {
+            console.warn("#display-info-object-tbl must be a <table>")
+            return
+        }
+
+        updateObjectTblUI(getCurrentObjectInObjEditor(item.ItemId, el), objTable)
+    })
+
+    renderComponent("#status-selector",
+        el => updateStatusDisplay(user.Status, el))
+
+    renderComponent("#cost", l => {
+        updateCostDisplay.call(this, el, item.ItemId)
+    })
+
+    renderComponent("#tz-selector", tzEl => {
+        if (!(tzEl instanceof this.win.HTMLSelectElement)) {
+            console.warn("#tz-selector must be a <select>")
+            return
+        }
+        tzEl.value = INTL_OPTIONS.timeZone
+    })
+
+    //Art Style
+    api_listArtStyles().then(as => {
+        for (let a in as) {
+            renderComponent(`#is-${as[a]}`, cb => {
+                if (!cb || !(cb instanceof HTMLInputElement)) return
+                if (items_hasArtStyle(item, Number(a) as ArtStyle)) {
+                    cb.checked = true
+                }
+            })
+        }
+    })
+
+    renderComponent("#location-link", el => {
+        if (!("value" in el)) return
+        let loc = item.Location
+        el.value = loc
+    })
+
+    //user styles
+    renderComponent("#custom-styles", el => {
+        let userExtra = getUserExtra(user, "styles")
+        let styles = userExtra || ""
+        el.innerText = styles
+    })
+
+    //type selector
+    renderComponent("#type-selector", el => {
+        if (!(el instanceof this.win.HTMLSelectElement)) {
+            console.warn("#type-selector must be a <select>")
+            return
+        }
+        fillTypeSelectionUI(el).then(() => {
+            el.value = item.Type
+        })
+    })
+
+    //format selector
+    renderComponent("#format-selector", formatSelector => {
+        if (!(formatSelector instanceof this.win.HTMLSelectElement)) {
+            console.warn("#format-selector must be a <select>")
+            return
+        }
+        fillFormatSelectionUI(formatSelector).then(() => {
+            formatSelector.value = String(item.Format)
+        })
+    })
+
+
+    renderComponent("#format-digitized", () => {
+        const digitized = el.getElementById("format-digitized")
+        if (!(digitized instanceof this.win.HTMLInputElement)) {
+            console.warn("#format-digitized must be a <input>")
+            return
+        }
+        digitized.checked = items_isDigitized(item.Format_Modifiers)
+    })
+
+
+    renderComponent("#genres", genresRoot => {
+        if (meta.Genres == "null") return
+        const genres = JSON.parse(meta.Genres || "[]")
+        const children = []
+        for (let genre of genres) {
+            const el = document.createElement("button")
+            el.classList.add("genre")
+            el.onclick = function() {
+                ui_search(`#g:${genre.replaceAll(" ", "\\ ")}`)
+            }
+            el.append(genre)
+            children.push(el)
+        }
+        genresRoot.replaceChildren(...children)
+    })
+
+    //tags
+    renderComponent("#tags", tagsRoot => {
+        tagsRoot.querySelectorAll("div").forEach(div => div.remove())
+
+        const tagTempl = el.querySelector("template#tag") as HTMLTemplateElement
+        if (tagTempl)
+            for (let tag of item.Tags || []) {
+                if (!tag) continue
+
+                const copy = tagTempl.content.cloneNode(true) as HTMLElement
+                const del = copy.querySelector("#delete-tag") as HTMLElement
+
+                del.setAttribute("tag-name", tag)
+
+                const btn = copy.querySelector("#tag-name") as HTMLElement
+                btn.prepend(tag)
+                btn.setAttribute("tag-name", tag)
+
+                btn.onclick = function(e) {
+                    if (e.target?.id === "delete-tag") return
+
+                    let btn = e.target as HTMLButtonElement
+                    let tag = btn.getAttribute("tag-name")
+                    ui_search(`#tag:${tag}`)
+                }
+
+                tagsRoot?.append(copy)
+            }
+    })
+
+    //type icon
+    let typeIcon = typeToSymbol(item.Type)
+    let formatIcon = formatToSymbolUI(item.Format, item.Format_Modifiers)
+    const formatName = await formatToName(item.Format, item.Format_Modifiers)
+    renderComponent("#on-format", async (onFormat) => {
+        if (!(formatName).startsWith("UNOWNED")) {
+            onFormat.innerHTML = `${formatToSymbolUI(item.Format, item.Format_Modifiers)} <span popover='hint'>${formatName}</span>`
+            onFormat.setAttribute("toggle-hint", "")
+        }
+    })
+
+    renderComponent("#media-type", el => {
+        el.innerHTML = `${typeIcon} <span popover='hint'>${item.Type}</span>`
+        el.setAttribute("toggle-hint", "")
+    })
+    renderComponent("#country-origin", el => {
+        if (meta.Country) {
+            let flags = items_countryOfOrigin2Flag(meta.Country)
+            el.title = ` (${meta.Country})`
+            el.innerText = flags
+        }
+    })
+    renderComponent("#main-title", displayEntryTitle => {
+        displayEntryTitle.innerText = meta.Title || item.En_Title
+        //only set the title of the heading to the user's title if the metadata title exists
+        //otherwise it looks dumb
+        if (meta.Title && item.En_Title) {
+            displayEntryTitle.title = item.En_Title
+        }
+
+        displayEntryTitle?.setAttribute("data-type-icon", typeIcon)
+        if (getUidUI() !== item.Uid)
+            displayEntryTitle?.setAttribute("data-owner", uid2username(item.Uid))
+
+        displayEntryTitle?.setAttribute("data-format-icon", formatIcon)
+
+        if (meta.Country) {
+            let flags = items_countryOfOrigin2Flag(meta.Country)
+            displayEntryTitle.title += ` (${meta.Country})`
+        }
+
+        //format
+        formatToName(item.Format, item.Format_Modifiers).then(name => {
+            displayEntryTitle?.setAttribute("data-format-name", name)
+        })
+    })
+
+
+
+
+    //Native title
+    renderComponent("#official-native-title", displayEntryNativeTitle => {
+        displayEntryNativeTitle.innerText = meta.Native_Title || item.Native_Title
+        //Same as with the regular title
+        if (meta.Native_Title && item.Native_Title) {
+            displayEntryNativeTitle.title = item.Native_Title
+        }
+    })
+
+    //Thumbnail
+    renderComponent("#thumbnail", imgEl => {
+        if (!(imgEl instanceof this.win.HTMLImageElement)) {
+            console.warn("#thumbnail must be an <img>")
+            return
+        }
+        imgEl.alt = meta.Title || item.En_Title
+        imgEl.src = fixThumbnailURL(meta.Thumbnail)
+    })
+
+    //Notes
+    renderComponent("#notes-edit-box", notesEditBox => {
+        if (!("value" in notesEditBox)) return
+        notesEditBox.value = user.Notes
+    })
+
+    renderComponent("#notes", notesEl => {
+        updateNotesDisplay(el, notesEl, item.ItemId)
+    })
+
+    //Rating
+    renderComponent("#user-rating", ratingEl => {
+        settings_load(user.Uid).then(() => {
+            applyUserRating(
+                settings_get(getUserUID(), "tiers"),
+                settings_get(getUserUID(), "rating_styles"),
+                user.UserRating,
+                settings_get(user.Uid, "user_rating_max"),
+                ratingEl
+            )
+        })
+    })
+
+    //Audience Rating
+    renderComponent("#audience-rating", audienceRatingEl => {
+        if (meta.Rating) {            
+            settings_load(user.Uid).then(() => {
+                applyUserRating(
+                    settings_get(getUserUID(), "tiers"),
+                    settings_get(getUserUID(), "rating_styles"),
+                    meta.Rating,
+                    meta.RatingMax || settings_get(meta.Uid, "user_rating_max"),
+                    audienceRatingEl
+                )
+            })
+        }
+    })
+
+    let data = meta
+    let mediaDependant
+    try {
+        mediaDependant = JSON.parse(data["MediaDependant"] || "{}")
+    } catch (err) {
+        console.error("Could not parse media dependant meta info json")
+        return
+    }
+
+    renderComponent("#view-count", viewCountEl => {
+        updateViewCountDisplay(el, viewCountEl, item.ItemId)
+    })
+
+    //View count
+    renderComponent("#view-time", viewMinsEl => {
+        updateViewTimeDisplay(el, viewMinsEl, item.ItemId)
+    })
+
+    renderComponent("#media-info", mediaInfoTbl => {
+        //remove the <Media>- part from the key looks ugly
+        let modifiedKeys: { [k: string]: string } = {}
+        for (let key in mediaDependant) {
+            let title = key.split("-").slice(1).join("-")
+            title = title[0].toLocaleUpperCase() + title.slice(1)
+            let val = mediaDependant[key]
+            if (!isNaN(Number(val))) {
+                val = Number(val).toLocaleString()
+            }
+            modifiedKeys[title] = val
+        }
+        mkGenericTbl(mediaInfoTbl, modifiedKeys)
+    })
+
+    let userPos = parseInt(user.CurrentPosition)
+
+    el.host.setAttribute("data-user-status", user.Status)
+
+    //Media dependant
+    let lengthInNumber = items_getLength(mediaDependant)[0] || 0
+
+    renderComponent("#entry-progressbar", progressEl => {
+        if (!("max" in progressEl &&
+            "value" in progressEl &&
+            /(Re)?Viewing/.test(user.Status))) return
+        progressEl.max = lengthInNumber || 1
+        progressEl.value = userPos || 0
+    })
+
+    renderComponent("#entry-progressbar-position-label", captionEl => {
+        captionEl.innerText = `${user.CurrentPosition}/${lengthInNumber}`
+        captionEl.title = `${Math.round(userPos / lengthInNumber * 1000) / 10}%`
+    })
+
+    renderComponent("#multiple-progress", multipleProgressEl => {
+        multipleProgressEl.innerHTML = ""
+
+        multipleProgressEl.replaceChildren(...mkDeProgressUI(item.ItemId))
+    })
+
+    //relation elements
+    for (let relationship of [
+        ["descendants", findDescendants],
+        ["copies", findCopies],
+        ["required-items", findRequirements],
+        ["required-by-items", items_findRequiredBy],
+    ] as const) {
+        renderComponent(`#${relationship[0]}`, relationshipEl => {
+            relationshipEl.innerHTML = ""
+            createRelationButtons(
+                item.ItemId,
+                relationshipEl,
+                relationship[1](item.ItemId),
+                relationship[0]
+            )
+        })
+    }
+
+    //Events
+    renderComponent("#user-actions", tbl => {
+        if (!(tbl instanceof this.win.HTMLTableElement)) return
+        updateEventsDisplay.call(this, el, tbl, user.ItemId)
+    })
+
+    //update this last because some legacy elements get filled with new elements
+    //that rely on stuff like entry-action
+    settings_load(user.Uid).then(() => {
+        updateDeclarativeDSL(this.de_actions, settings_get(getUserUID(), "enable_unsafe"), item, user, meta, el)
+    })
+}
+
+function displayItemInWindow(itemId: bigint, target: string = "_blank", popup: boolean = false) {
+    return openDisplayWinUI(itemId, target, popup)
+}
+
+/**
+ * @description legacy version of de_actions.editstyles
+ * @deprecated
+ */
+function displayEntryEditStyles(el: HTMLElement) {
+    let root = el.getRootNode() as ShadowRoot
+    const styleEditor = root.getElementById("style-editor")
+    if (!styleEditor) return
+
+    styleEditor.hidden = !styleEditor.hidden
+}
+
+/**
+ * @description legacy version of de_actions.edittemplate
+ * @deprecated
+ */
+function displayEntryEditTemplate(el: HTMLElement) {
+    let root = el.getRootNode() as ShadowRoot
+    openModalUI("template-editor-container", root)
+}
+
+function renderDisplayItem(this: DisplayMode, itemId: bigint, template?: string, append: boolean = true): HTMLElement {
+    let el = this.win.document.createElement("display-entry")
+    let root = el.shadowRoot
+
+    if (!root) {
+        throw new Error("shadow root is falsey while rendering display item")
+    }
+
+    if(append)
+        this.output.append(el)
+
+    const
+        user = findUserEntryById(itemId),
+        meta = findMetadataById(itemId),
+        events = findUserEventsById(itemId),
+        item = findInfoEntryById(itemId)
+
+    const renderComponent = function(query: string,
+        fill: (element: HTMLElement, itemId: bigint) => any) {
+        for (let el of root.querySelectorAll(query)) {
+            fill(el as HTMLElement, itemId)
+        }
+    }
+
+    //use the dumbest hack imaginable to allow the previewtemplate function to force the window it opens to do the rendering
+    //that hack being setting a global variable called GLOBAL_TEMPLATE which is the template to use
+    //@ts-ignore
+    if (self.GLOBAL_TEMPLATE && String(itemId) in self.GLOBAL_TEMPLATE) {
+        //@ts-ignore
+        template = self.GLOBAL_TEMPLATE[String(itemId)]
+    }
+
+    if (template || ((template = getUserExtra(user, "template")?.trim()))) {
+        (root.getElementById("root") as HTMLDivElement).innerHTML = template
+    }
+
+
+    hookActionButtons(root, itemId)
+
+    renderComponent("#recommended-by",
+        el => {
+            if (!(el instanceof this.win.HTMLDataListElement)) {
+                console.warn("#recommended-by must be a datalist element")
+                return
+            }
+            fillRecommendedListUI(el, getUidUI())
+        })
+
+    api_listArtStyles().then(as => {
+        for (let a in as) {
+            renderComponent(`#is-${as[a]}`, el => {
+                if (!el || !(el instanceof HTMLInputElement)) return
+                el.onchange = (e) => e.target instanceof HTMLElement && this.de_actions.toggleartstyle(e.target)
+            })
+        }
+    })
+
+    renderComponent("#current-edited-object",
+        el => {
+            el.onchange =
+                e =>
+                    e.target instanceof this.win.HTMLElement &&
+                    this.de_actions.setobjtable(e.target)
+        })
+
+    for(let mod of items_F_MODS) {
+        let inputName = {
+            [items_F_DIGI_MOD]: "digitized",
+            [items_F_UNOWNED_MOD]: "unowned"
+        }[mod]
+
+        if(!inputName) {
+            console.warn(`${mod} does not have a corresponding input`)
+            continue
+        }
+
+        let cb = dom_getel(`[name="is-${inputName}"]`, this.win.HTMLInputElement, root)
+        if (items_hasFMod(item.Format_Modifiers, mod)) {
+            if(cb) {
+                cb.checked = true
+            }
+        }
+
+        if(cb) {
+            cb.oninput = e => {
+                if(e.target.checked) {
+                    item.Format_Modifiers |= mod
+                } else {
+                    item.Format_Modifiers -= mod
+                }
+                setPropUI(item, "Format_Modifiers", item.Format_Modifiers, `set ${inputName}`)
+            }
+        }
+    }
+
+    for (let input of [
+        "include-self-in-cost",
+        "include-copies-in-cost",
+        "include-children-in-cost",
+        "include-requires-in-cost",
+        "include-recusively-in-cost"
+    ]) {
+        renderComponent(`#${input}`, el => {
+            el.onchange =
+                (e) =>
+                    e.target instanceof this.win.HTMLElement &&
+                    this.de_actions.togglerelationinclude(e.target)
+        })
+    }
+
+    renderComponent("button.popout", el => popoutUI(el))
+    renderComponent("#status-selector", el => {
+        el.onchange =
+            e =>
+                e.target instanceof this.win.HTMLSelectElement &&
+                this.de_actions.updatestatus(e.target)
+    })
+
+    renderComponent("#new-child", el => {
+        el.addEventListener("click", e => {
+            this.de_actions.newchild(e.target as HTMLElement)
+        })
+    })
+
+    renderComponent("#new-copy", el => {
+        el.addEventListener("click", e => {
+            this.de_actions.newcopy(e.target as HTMLElement)
+        })
+    })
+
+    renderComponent("#new-child-by-id", el => {
+        if (!("value" in el)) return
+        el.onchange = e => {
+            e.target instanceof HTMLElement && this.de_actions.addchild(e.target)
+        }
+    })
+
+    renderComponent("#notes-edit-box", el => {
+        if (!("value" in el)) return
+
+        el.onchange = () => {
+            updateNotesUI(item.ItemId, String(el.value))
+        }
+    })
+
+    renderComponent("#create-tag", el => {
+        el.onclick = async () => {
+            const tagsdl = dom_getel("#tags-dl", this.win.HTMLDataListElement, this.win.document)?.cloneNode(true)
+            inputItemUI(el, 'tag', (e, tag) => {
+                newTagsUI(itemId, [tag])
+                el.focus()
+            }, tagsdl as HTMLDataListElement || undefined)
+        }
+    })
+
+    renderComponent("#create-recommended-by", el => {
+        el.onclick = async () => {
+            const rdl = dom_getel("#recommended-by", this.win.HTMLDataListElement, this.win.document)?.cloneNode(true)
+            inputItemUI(el, 'recommender', (e, r) => {
+                newRecommendedByUI(itemId, [r])
+                el.focus()
+            }, rdl as HTMLDataListElement || undefined)
+        }
+    })
+
+    renderComponent("#location-link", el => {
+        if (!("value" in el)) return
+
+        el.onchange = async () => {
+            await updateLocationUI(itemId, String(el.value))
+        }
+    })
+
+    renderComponent("#user-actions-filter", el => {
+        if (!("value" in el)) return
+        el.oninput = (e) => {
+            renderComponent("#user-actions", eventsTbl => {
+                if (!(eventsTbl instanceof this.win.HTMLTableElement)) return
+                updateEventsDisplay.call(this, root, eventsTbl, itemId, String(el.value))
+            })
+        }
+    })
+
+    changeDisplayItemData.call(this, item, user, meta, events, el)
+    return el
+}
+
+function removeDisplayItem(this: DisplayMode, itemId: bigint) {
+    // displayEntryIntersected.delete(String(itemId))
+    const el = this.output.querySelector(`[data-item-id="${itemId}"]`)
+    if (!el) return
+    el.remove()
+}
+
+let _lastTemplates = new Map<bigint, string>
+function refreshDisplayItem(this: DisplayMode, itemId: bigint) {
+    let el = this.output.querySelector(`display-entry[data-item-id="${itemId}"]`) as HTMLElement
+    let info = findInfoEntryById(itemId)
+    if (!info) return
+
+
+    let template = getUserExtra(findUserEntryById(itemId), "template")?.trim()
+    let lastTempl = _lastTemplates.get(itemId)
+    _lastTemplates.set(itemId, template)
+
+    //if we have a different template, we have to rerender the entire thing
+    if (el && template === lastTempl) {
+        let user = findUserEntryById(itemId)
+        let events = findUserEventsById(itemId)
+        let meta = findMetadataById(itemId)
+        if (!info || !user || !events || !meta) return
+        changeDisplayItemData.call(this, info, user, meta, events, el)
+    } else {
+        let newEl = renderDisplayItem.call(this, itemId, undefined, false)
+        //we have to remove the previous element, otherwise we get duplicates
+        if(template !== lastTempl) el.replaceWith(newEl)
+    }
+
+}
+
+/**
+ * Given an element from within a shadow root of a &lt;display-entry&gt;
+ * find the id based on the data-item-id attribute of the host element.
+ * @param {HTMLElement} element an element within the shadowroot
+ * @returns {bigint} 0 if not found
+ */
+function getIdFromDisplayElement(element: HTMLElement): bigint {
+    let rootNode = element.getRootNode() as ShadowRoot
+    let host = rootNode.host
+    if (!host) {
+        return 0n
+    }
+    return BigInt(String(host.getAttribute("data-item-id")))
+}
+
+function _fetchLocationBackup(this: DisplayMode, itemId: bigint) {
+    const item = findInfoEntryById(itemId) as InfoEntry
+
+    let provider = item.Type === "Show" ? "sonarr" : "radarr"
+    alert(`Using ${provider} to find location`)
+
+    const popover = this.output.ownerDocument.getElementById("items-listing") as HTMLDivElement
+
+    async function onfetchLocation(res: Response | null) {
+        if (!res) {
+            alert("Failed to set location")
+            return
+        }
+        if (res.status !== 200) {
+            console.error(await res.text())
+            alert("Failed to set location")
+            return
+        }
+
+        const newLocation = await res.text()
+        alert(`Location set to: ${newLocation}`)
+        item.Location = newLocation
+        updateInfo2({
+            [String(item.ItemId)]: { info: item }
+        })
+        // popover.hidePopover()
+    }
+
+    api_identify(item.En_Title || item.Native_Title, provider).then(async (res) => {
+        if (!res) return
+
+        if (res.status !== 200) {
+            alert("Failed to find entries")
+            return
+        }
+
+        const [_, metaText] = (await res.text()).split("\x02")
+        const metaInfo = [...api_deserializeJsonl<MetadataEntry>(metaText.trim().split("\n"))]
+
+        //TODO: if the length is 0, ask the user for a search query
+
+        if (metaInfo.length === 1) {
+            api_fetchLocation(item.ItemId, getUidUI(), provider, String(metaInfo[0].ItemId)).then(onfetchLocation)
+            return
+        }
+
+        const metaRecord = Object.fromEntries(metaInfo.map(v => [v.ItemId, v]))
+
+        const container = fillItemListingUI(metaRecord)
+
+        const figs = container.querySelectorAll("figure")
+        for (const fig of figs) {
+            fig.onclick = function() {
+                const id = fig.getAttribute("data-item-id") as string
+                api_fetchLocation(item.ItemId, getUidUI(), provider, id)
+                    .then(onfetchLocation)
+            }
+        }
+
+        popover.showPopover()
+    })
+}
+
+function _fetchLocation(this: DisplayMode, itemId: bigint) {
+    api_fetchLocation(itemId, getUidUI())
+        .then(async (res) => {
+            if (res == null) {
+                alert("Failed to get location")
+                return
+            }
+
+            let newLocation = await res.text()
+
+            if (res.status !== 200) {
+                alert("Failed to get location, loading possible options")
+                if (newLocation.includes("could not")) {
+                    _fetchLocationBackup.call(this, itemId)
+                }
+                return
+            }
+
+            const info = findInfoEntryById(itemId) as InfoEntry
+            info.Location = newLocation
+
+            updateInfo2({
+                [String(itemId)]: { info }
+            })
+            alert(`Location set to: ${newLocation}`)
+        })
+}
+
+function copyThis(this: DisplayMode, item: InfoEntry) {
+    const user = findUserEntryById(item.ItemId) as UserEntry
+    const meta = findMetadataById(item.ItemId) as MetadataEntry
+    const events = findUserEventsById(item.ItemId) as UserEvent[]
+
+    api_createEntry({
+        title: item.En_Title,
+        "native-title": item.Native_Title,
+        timezone: INTL_OPTIONS.timeZone,
+        format: item.Format,
+        "art-style": item.ArtStyle,
+        libraryId: item.Library || undefined,
+        copyOf: item.ItemId,
+        tags: item.Collection,
+        location: item.Location,
+        "user-notes": user.Notes,
+        "user-status": user.Status,
+        "user-view-count": user.ViewCount,
+        "user-rating": user.UserRating,
+        "get-metadata": false,
+        "metadata-id": item.MetadataId,
+        type: item.Type,
+    }).then(async (res) => {
+        if (!res || res.status !== 200) {
+            alert("failed to create copy")
+            return
+        }
+
+        const text = await res.text()
+        const itemCopy = api_deserializeJsonl(text.trim()).next().value as InfoEntry
+        const userCopy = { ...user }
+        userCopy.ItemId = itemCopy.ItemId
+        const metaCopy = { ...meta }
+        metaCopy.ItemId = itemCopy.MetadataId
+
+        const promises = []
+        promises.push(api_setItem("", itemCopy))
+        promises.push(api_setItem("engagement/", userCopy))
+        for (let event of events) {
+            promises.push(api_registerEvent(itemCopy.ItemId, event.Event, event.Timestamp, event.After, event.TimeZone))
+        }
+
+        Promise.all(promises)
+            .then(responses => {
+                for (let res of responses) {
+                    if (res?.status !== 200) {
+                        alert("Failed to make a complete copy")
+                        return
+                    }
+                }
+
+                alert(`Coppied: ${item.En_Title}`)
+
+                items_addItem({
+                    info: itemCopy,
+                    user: userCopy,
+                    meta: metaCopy,
+                    events: [],
+                    transactions: []
+                })
+
+                items_addCopy(itemCopy.ItemId, item.ItemId)
+
+                selectUI(itemCopy, true, this)
+
+                if(components['sidebarUI'])
+                    renderSidebarItem.call(components['sidebarUI'], itemCopy, undefined, { below: String(item.ItemId) })
+
+                updateInfo2({
+                    [String(item.ItemId)]: {
+                        info: item
+                    }
+                })
+            })
+            .catch(console.error)
+    })
+}
+
+
+async function deleteEventByEventId(eventId: number) {
+    const uid = getUidUI()
+    return await new Promise(final => {
+        confirmUI("Are you sure you want to delete this event")
+            .then(async (ok) => {
+                if(!ok) return
+                const res = await api_deleteEventV2(eventId, uid)
+                if (res?.status !== 200) {
+                    alert(res?.text() || "Failed to delete event")
+                    final(true)
+                }
+                alert("Successfully deleted event")
+                final(true)
+            })
+            .catch(() => {
+                console.log("confirmUI() failed")
+            })
+    })
+
+}
+
+mode_register("entry", DisplayMode)

@@ -1,0 +1,60 @@
+<template id="item-identification-form-dialog">
+    <link rel="stylesheet" href="/css/colors.css">
+    <link rel="stylesheet" href="/css/general.css">
+
+    <dialog id="identify-items">
+    </dialog>
+
+    <dialog id="item-identification-form">
+        <form method="dialog" name="dialog-form" class="flex">
+            <select name="provider" required>
+                <optgroup label="Anime">
+                    <option value="anilist">Anilist</option>
+                </optgroup>
+                <optgroup label="Movies+TV">
+                    <option value="omdb">Open Movie Database (imdb)</option>
+                </optgroup>
+                <optgroup label="Books">
+                    <option value="openlibrary">Open Library Lookup (by id only)</option>
+                    <option value="googlebooks">Google Books Search</option>
+                </optgroup>
+                <optgroup label="Games">
+                    <option value="steam">Steam</option>
+                    <option value="gtdbswitch">GamesTDB (switch)</option>
+                    <option value="gtdbwii">GamesTDB (wii)</option>
+                    <option value="gtdbgamecube">GamesTDB (gamecube)</option>
+                    <option value="gtdbds">GamesTDB (ds)</option>
+                    <option value="gtdbwiiu">GamesTDB (wii u)</option>
+                    <option value="gtdbps3">GamesTDB (ps3)</option>
+                    <option value="gtdbcustom">GamesTDB (custom)</option>
+                </optgroup>
+                <optgroup label="Movies">
+                    <option value="radarr">Radarr</option>
+                    <option value="seerr">Seerr</option>
+                </optgroup>
+                <optgroup label="Tv">
+                    <option value="sonarr">Sonarr</option>
+                </optgroup>
+                <optgroup label="All">
+                    <option value="wikipedia">Wikipedia</option>
+                </optgroup>
+            </select>
+            <select name="query-type" required>
+                <option value="by-title">By title</option>
+                <option value="by-id">By id</option>
+            </select>
+            <input type="search" name="search" placeholder="search/id (id must be numeric)" required>
+            <button value="search">
+                🔍︎
+            </button>
+        </form>
+        <p>
+            A search can be made by title or by id.
+        <p>
+        <b>Special cases</b>
+        <p>Id for omdb/imdb is the id without the tt
+        <p>Id for wikipedia is just the page name (from the url)
+
+        <close-button></close-button>
+    </dialog>
+</template>

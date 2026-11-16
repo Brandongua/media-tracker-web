@@ -1,0 +1,28 @@
+<template id="script-template">
+<div id="script-output" class="output">
+    <p align="center">
+        <a href="/usage/js_api_docs.html">Usage</a>
+    </p>
+    <div id="script-root">
+
+        <div class="flex" style="grid-area: run-button;">
+            <button id="script-execute">▶</button>
+            <div class="flex column">
+                <label for="script-execute-output-clear">clear on run <input type="checkbox"
+                        id="script-execute-output-clear" style="vertical-align: middle;"
+                        checked></label>
+            </div>
+            <select id="script-select-view" style='height: 100%; text-align: center;'>
+                <option value="entry" title="Normal mode">🏠︎ Normal</option>
+                <option value="categorize" title="Categorize mode">🔠️ Categorize</option>
+                <option value="gallery" title="Gallery mode">🖼︎ Gallery</option>
+                <option value="tierlist" title="Tierlist mode">S Tierlist</option>
+                <option value="calc" title="Calc mode">🔢︎ Calc</option>
+                <option value="sidebar" title="Sidebar mode">| Sidebar</option>
+            </select>
+        </div>
+        <textarea id="script"></textarea>
+        <output id="script-execute-output" style="font-family: monospace"></output>
+    </div>
+</div>
+</template>

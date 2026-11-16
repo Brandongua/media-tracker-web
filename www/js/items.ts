@@ -1,0 +1,2321 @@
+/**
+ * @module items
+ * @requires api.ts
+ * @description
+ * contains the global state of all entries, libraries, selected entries, etc..
+ * in addition contains functions that interact with the state,
+ * such as retrieving and setting entries
+ * generally only updates locally
+ */
+
+//TODO:
+//add a /list-relations which pulls from the relations table
+//and from parentId/copyOf/requires
+//and sends the results back as a list of relations
+//
+//there should then be a function here that loads all relations into
+//the EntryRelations instance for each Entry
+
+//for format
+const items_F_DIGI_MOD = 0b1
+const items_F_UNOWNED_MOD = 0b1 << 1
+
+const items_F_MODS = new Set([
+    items_F_DIGI_MOD, items_F_UNOWNED_MOD
+])
+
+const items_R_CHILD = 1
+const items_R_REQUIRES = 2
+const items_R_COPY = 3
+
+const AS_ANIME = 1
+const AS_CARTOON = 2
+const AS_HANDRAWN = 4
+const AS_DIGITAL = 8
+const AS_CGI = 16
+const AS_LIVE_ACTION = 32
+const AS_2D = 64
+const AS_3D = 128
+
+type ASName =
+    | "Anime"
+    | "Cartoon"
+    | "Handrawn"
+    | "Digital"
+    | "CGI"
+    | "Liveaction"
+    | "2D"
+    | "3D"
+
+type ArtStyle =
+    | typeof AS_ANIME
+    | typeof AS_CARTOON
+    | typeof AS_HANDRAWN
+    | typeof AS_DIGITAL
+    | typeof AS_CGI
+    | typeof AS_LIVE_ACTION
+
+type UserStatus =
+    | ""
+    | "Viewing"
+    | "Finished"
+    | "Dropped"
+    | "Planned"
+    | "ReViewing"
+    | "Paused"
+    | "Waiting"
+
+type EntryType =
+    | "Show"
+    | "Movie"
+    | "MovieShort"
+    | "Game"
+    | "BoardGame"
+    | "Song"
+    | "Book"
+    | "Manga"
+    | "Collection"
+    | "Picture"
+    | "Meme"
+    | "Library"
+    | "Album"
+    | "Soundtrack"
+
+type UserEvent = {
+    EventId: number
+    ItemId: bigint
+    Event: string
+    Timestamp: number
+    After: number
+    TimeZone: string
+    Before: number
+}
+
+type InfoEntry = {
+    ItemId: bigint
+    Collection: string
+    Format: number
+    ArtStyle: number
+    Location: string
+    Native_Title: string
+    Type: EntryType
+    En_Title: string
+    Library: bigint
+    Uid: number
+    RecommendedBy: string
+    Priority: number
+    Format_Modifiers: number
+    MetadataId: bigint
+
+    Tags: string[]
+}
+
+type UserEntry = {
+    Uid: number,
+    ItemId: bigint
+    Status: UserStatus
+    ViewCount: number
+    UserRating: number
+    Notes: string
+    CurrentPosition: string
+    Extra: string
+    Minutes: number
+}
+
+type MetadataEntry = {
+    Uid: number,
+    ItemId: bigint
+    Rating: number
+    RatingMax: number
+    Description: string
+    ReleaseYear: number
+    Thumbnail: string
+    MediaDependant: string
+    Datapoints: string
+    Title: string
+    Native_Title: string
+    Provider: string
+    ProviderID: string
+    Genres: string
+    Country: string
+}
+
+type TransactionEntry = {
+    Uid: number,
+    ItemId: bigint,
+    EventId: number,
+    Price: number,
+    Currency: string
+    TransactionId: number,
+}
+
+
+class items_Relations {
+    children: bigint[]
+
+    requiredBy: bigint[]
+
+    constructor(public id: bigint, children: bigint[] | bigint, public copies: bigint[], public requires: bigint[]) {
+        this.requiredBy = []
+
+        //accept a parent for legacy compat
+        if (typeof children === 'bigint') {
+            this.children = []
+        } else {
+            this.children = children
+        }
+    }
+
+    setChildren(children: bigint[]) {
+        this.children = children
+    }
+
+    setCopies(copies: bigint[]) {
+        for(let copy of this.copies) {
+            this.removeCopy(copy)
+        }
+
+        for(let copy of copies) {
+            items_addCopy(this.id, copy)
+        }
+    }
+
+    setRequires(requires: bigint[]) {
+        for(let req of this.requires) {
+            this.removeRequires(req)
+        }
+
+        for(let req of requires) {
+            this.addRequires(req)
+        }
+    }
+
+    removeRequires(id: bigint) {
+        if (this.requires.includes(id)) {
+            this.requires = this.requires.filter(v => v !== id)
+            items_getEntry(id).relations.requiredBy = items_getEntry(id).relations.requiredBy.filter(v => v !== this.id)
+        }
+    }
+
+    removeChild(id: bigint) {
+        if (this.children.includes(id)) {
+            this.children = this.children.filter(v => v !== id)
+        }
+    }
+
+    removeAllParents() {
+        for (let parent of this.findParents()) {
+            items_getEntry(parent).relations.removeChild(this.id)
+        }
+    }
+
+    removeCopy(id: bigint) {
+        //prevent infinite recursion
+        if (this.copies.includes(id)) {
+            this.copies = this.copies.filter(v => v !== id)
+            items_getEntry(id).relations.removeCopy(this.id)
+        }
+    }
+
+    /**
+     * Sets `this` to have `id` as a parent
+     * Adds `this` as a child of `id`
+     */
+    setParent(id: bigint) {
+        items_getEntry(id).relations.children.push(this.id)
+    }
+
+    addChild(id: bigint) {
+        this.children.push(id)
+        // items_getEntry(id).relations.setParent(this.id)
+    }
+
+    addRequires(id: bigint) {
+        this.requires.push(id)
+        items_getEntry(id).relations.requiredBy.push(this.id)
+    }
+
+    isChild() {
+        for (let k in items_getAllEntries()) {
+            if (this.isChildOf(BigInt(k))) {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    isCopy() {
+        return this.copies.length !== 0
+    }
+
+    /**
+     * Checks if `this` is a child of `id`
+     */
+    isChildOf(id: bigint) {
+        if (items_getEntry(id).relations.children.includes(this.id)) {
+            return true
+        }
+
+        return false
+    }
+
+    *findCopies(): Generator<items_Entry> {
+        yield* this.copies.values().map(v => items_getEntry(v))
+    }
+
+    *findRequirements(): Generator<items_Entry> {
+        yield* this.requires.values().map(v => items_getEntry(v))
+    }
+
+    *findDescendants(): Generator<items_Entry> {
+        yield* this.children.values().map(v => items_getEntry(v))
+    }
+
+    *findParents(): Generator<bigint> {
+        const entries = items_getAllEntries()
+        for (let id in entries) {
+            const entry = entries[id]
+
+            for (let child of entry.relations.children) {
+                if (child === this.id) {
+                    yield entry.ItemId
+                }
+            }
+        }
+    }
+}
+
+type GlobalsNewUi = {
+    entries: Record<string, items_Entry>
+    results: items_Entry[]
+    selectedEntries: InfoEntry[]
+    libraries: Record<string, InfoEntry>
+    viewingLibrary: bigint
+    metadata: Record<string, MetadataEntry>
+}
+
+let _globalsNewUi: GlobalsNewUi = {
+    entries: {},
+    results: [],
+    selectedEntries: [],
+    libraries: {},
+    viewingLibrary: 0n,
+    metadata: {}
+}
+
+class items_Entry {
+    user: UserEntry
+    info: InfoEntry
+    relations: items_Relations
+    transactions: TransactionEntry[]
+
+    /**
+        * Keeps track of if the item is properly loaded from the server
+        * or if it is a fake placeholder item
+    */
+    loaded: boolean
+    loadedEvents: boolean
+    loadedTransactions: boolean
+
+    events: UserEvent[]
+
+    constructor(info: InfoEntry | bigint, user?: UserEntry, meta?: MetadataEntry, events?: UserEvent[], transactions?: TransactionEntry[]) {
+        this.info = typeof info === 'bigint' ? genericInfo(info, 0) : info
+        this.user = user || genericUserEntry(typeof info === 'bigint' ? info : info.ItemId, this.info.Uid)
+        this.meta = meta || genericMetadata(typeof info === 'bigint' ? info : info.MetadataId, this.info.Uid)
+        this.events = events || []
+        this.transactions = transactions || []
+
+        //items_refreshRelations() must be called to fill all relations
+        this.relations = new items_Relations(this.info.ItemId, [], [], [])
+        this.loaded = true
+        this.loadedEvents = false
+        this.loadedTransactions = false
+    }
+
+    static fromObj({
+        info,
+        user,
+        meta,
+        events,
+        transactions,
+        children,
+        copies,
+        requirements,
+    }: {
+        info: InfoEntry | bigint,
+        user?: UserEntry,
+        meta?: MetadataEntry,
+        events?: UserEvent[],
+        transactions?: TransactionEntry[],
+        children?: bigint[],
+        copies?: bigint[],
+        requirements?: bigint[]
+    }) {
+        let e = new items_Entry(info, user, meta, events, transactions)
+        if(children) for(let child of children) {
+            e.relations.addChild(child)
+        }
+
+        if(copies) for (let copy of copies) {
+            items_addCopy(e.ItemId, copy)
+        }
+
+        if(requirements) for (let requirement of requirements) {
+            e.relations.addRequires(requirement)
+        }
+    }
+
+    static createUnloaded(itemid: bigint) {
+        const info = genericInfo(itemid, 0)
+        info.En_Title = `UNKNOWN <id:${itemid}>`
+        let item = new items_Entry(info)
+        item.loaded = false
+        return item
+    }
+
+    get meta() {
+        return items_getMetadata(this.info.MetadataId)
+    }
+
+    set meta(val: MetadataEntry) {
+        this.info.MetadataId = val.ItemId
+        items_setMetadata(val)
+    }
+
+    async getUser() {
+        return await items_getUserById(this.ItemId)
+    }
+
+    async getMeta() {
+        return await items_getMetadataById(this.ItemId)
+    }
+
+    getEvent(id: number) {
+        for(let event of this.events) {
+            if(event.EventId === id) {
+                return event
+            }
+        }
+    }
+
+    getTransactionByEventId(eventId: number) {
+        for(let transaction of this.transactions) {
+            if(transaction.EventId === eventId) {
+                return transaction
+            }
+        }
+    }
+
+    getTransactionById(tId: number) {
+        for(let t of this.transactions) {
+            if(t.TransactionId == tId) return t
+        }
+    }
+
+    getLastPurchasePrice() {
+        for(let i = this.transactions.length - 1; i >= 0; i--) {
+            if(this.transactions[i].Price < 0) continue
+
+            return this.transactions[i].Price
+        }
+        return 0
+    }
+
+    get fixedThumbnail() {
+        return fixThumbnailURL(this.meta.Thumbnail)
+    }
+
+    get ItemId() {
+        return this.info.ItemId
+    }
+}
+
+function items_sumTransactions(item: bigint) {
+    const transactions = items_getEntry(item).transactions
+    if(Math.sumPrecise) {
+        return Math.sumPrecise(transactions.values().map(v => v.Price))
+    }
+
+    let total = 0
+    for(let transaction of transactions) {
+        total += transaction.Price
+    }
+    return total
+}
+
+/**
+ * normalizes a metadata rating, returns 0 if there is no rating
+ */
+function items_getNormalizedRating(meta: MetadataEntry): number {
+    let max = meta.RatingMax || settings_get(meta.Uid, "user_rating_max")
+    let normal = (meta.Rating / max * 100)
+    return normal
+}
+
+function items_normalizeRating(rating: number, max: number): number {
+    if(max == 100) return rating
+    return (rating / max * 100) || 0
+}
+
+function items_replaceEvent(newEvent: UserEvent) {
+    const events = items_getEntry(newEvent.ItemId).events
+    for(let i = 0; i < events.length; i++) {
+        if(events[i].EventId == newEvent.EventId) {
+            events[i] = newEvent
+            break
+        }
+    }
+}
+
+/**
+ * Sets the current library
+ * @param {bigint} id The id of the library to set to (can be 0 for no library)
+ */
+function items_setCurrentLibrary(id: bigint) {
+    _globalsNewUi.viewingLibrary = id
+}
+
+/**
+ * Gets the current library
+ * @returns {bigint} the id of the library
+ */
+function items_getCurrentLibrary(): bigint {
+    return _globalsNewUi.viewingLibrary
+}
+
+/**
+ * Gets a dictionary of all library ids
+ * @returns {Record<string, InfoEntry>} id: library
+ */
+function items_getLibraries(): Record<string, InfoEntry> {
+    return _globalsNewUi.libraries
+}
+
+/**
+ * Adds a library to the list of libraries
+ * @param {InfoEntry} info The library to add
+ */
+function items_setLibrary(info: InfoEntry) {
+    _globalsNewUi.libraries[String(info.ItemId)] = info
+}
+
+/**
+ * Removes a library from the list of libraries
+ * @param {string} id The id of the library to remove
+ */
+function items_deleteLibrary(id: string) {
+    delete _globalsNewUi.libraries[id]
+}
+
+/**
+ * Add a requirement to an item
+ * @param {bigint} item The item to add a requirement to
+ * @param {bigint} requires The id of the item that is the requirement
+ */
+function items_addRequires(item: bigint, requires: bigint) {
+    items_getEntry(item).relations.addRequires(requires)
+}
+
+/**
+ * Add a child to an item
+ * @param {bigint} child The id of the child
+ * @param {bigint} parent The id of the parent
+ */
+function items_addChild(child: bigint, parent: bigint) {
+    items_getEntry(parent).relations.addChild(child)
+}
+
+/**
+ * Sets 2 items to be copies of each other
+ * @param {bigint} copy id of item 1
+ * @param {bigint} copyof id of item 2
+ */
+function items_addCopy(copy: bigint, copyof: bigint) {
+    items_getEntry(copy).relations.copies.push(copyof)
+    items_getEntry(copyof).relations.copies.push(copy)
+}
+
+/**
+ * Removes a requirement from an item
+ * @param {bigint} item The item to remove the requirement from
+ * @param {bigint} requires The id of the requirement to remove.
+ */
+function items_removeRequires(item: bigint, requires: bigint) {
+    items_getEntry(item).relations.removeRequires(requires)
+}
+
+/**
+ * Remove a child from an item
+ * @param {bigint} child The child to remove from the parent
+ * @param {bigint} parent The parent to remove the child from
+ */
+function items_removeChild(child: bigint, parent: bigint) {
+    items_getEntry(parent).relations.removeChild(child)
+}
+
+/**
+ * Make 2 items no longer copies of each other
+ * @param {bigint} copy item 1
+ * @param {bigint} copyof item 2
+ */
+function items_removeCopy(copy: bigint, copyof: bigint) {
+    //relations.removeCopy removes both sides of the copy
+    items_getEntry(copy).relations.removeCopy(copyof)
+}
+
+/**
+    * Adds a list of items by id
+    * For each item, if it does not exist (or replace is true), fetch all information about it
+    * `replace` determines whether or not to replace existing entries
+    * @param {bigint[] | bigint} items
+    * @param {boolean} replace
+    * @returns {Promise<void>}
+*/
+async function* items_addById(items: bigint[] | bigint, replace: boolean = false): AsyncGenerator<items_Entry> {
+    if(typeof items === 'bigint') items = [items]
+
+    let idsThatNeedInfo = []
+    for(let item of items) {
+        if(replace && items_entryExists(item)) {
+            items_delEntry(item)
+        }
+        if(!items_entryExists(item)) {
+            idsThatNeedInfo.push(item)
+        }
+    }
+
+    for await(let i of api_streamEntriesAll(idsThatNeedInfo, 0)) {
+        let missing = items.slice(0, items.indexOf(i.info.ItemId))
+        for(let m of missing) {
+            yield items_getEntry(m)
+        }
+        items = items.slice(items.indexOf(i.info.ItemId) + 1)
+        items_addItem(i)
+        yield items_getEntry(i.info.ItemId)
+    }
+
+    for(let i of items) {
+        yield items_getEntry(i)
+    }
+}
+
+/**
+ * Sets the global results list
+ * @param {bigint[]} items - the item ids to set as the reults
+*/
+function items_setResults(items: bigint[]) {
+    _globalsNewUi.results = []
+    for (let id of items) {
+        _globalsNewUi.results.push(items_getEntry(id))
+    }
+}
+
+/**
+ * Get the search results list
+ * @returns {items_Entry[]}
+ */
+function items_getResults(): items_Entry[] {
+    return _globalsNewUi.results
+}
+
+/**
+ * Get the list of selected items
+ * @returns {InfoEntry[]}
+ */
+function items_getSelected(): InfoEntry[] {
+    return _globalsNewUi.selectedEntries
+}
+
+/**
+ * Clears the selected items
+ * (You probably want mode_clearItems() instead, as this function only clears the state, not the visual)
+ */
+function items_clearSelected() {
+    _globalsNewUi.selectedEntries = []
+}
+
+/**
+ * Select an item by id
+ * (You probably want mode_selectItem() insted)
+ * @param {bigint} id The id to select
+ */
+function items_selectById(id: bigint): void {
+    _globalsNewUi.selectedEntries.push(items_getEntry(id).info)
+}
+
+/**
+ * Sets the list of selected items
+ * (you probably want mode_selectItemList() instead)
+ * @param {InfoEntry[]} items The list of items to select
+ */
+function items_setSelected(items: InfoEntry[]) {
+    _globalsNewUi.selectedEntries = items
+}
+
+/**
+ * Deselects an item by id
+ * (You probably want mode_deselectItem() instead)
+ * @param {bigint} id The id to deselect
+ */
+function items_deselectById(id: bigint) {
+    _globalsNewUi.selectedEntries = _globalsNewUi.selectedEntries.filter(v => v.ItemId !== id)
+}
+
+/**
+ * Updates or creates entries in the global entries map
+ * @param {InfoEntry[]} items - the items to update or create
+*/
+function items_setEntries(items: InfoEntry[]) {
+    for (let item of items) {
+        let stashed = items_getEntry(item.ItemId)
+        if (!stashed) {
+            _globalsNewUi.entries[String(item.ItemId)] = new items_Entry(item, findUserEntryById(item.ItemId), findMetadataById(item.ItemId), findUserEventsById(item.ItemId))
+        }
+        else {
+            stashed.info = item
+        }
+    }
+}
+
+/**
+ * Updates an entry by id in the global entries map
+ * Keep in mind this is client side only, and only updates state not visually
+ * @see updateInfo2()
+ * @see api_setItem()
+ * @param {string} id The id to update
+ * @param {{user: UserEntry, events: UserEvent[], meta: MetadataEntry, info: InfoEntry}} with Update the id with this information
+ */
+function items_updateEntryById(id: string, { user, events, meta, info, transactions }: Partial<{
+    user: UserEntry,
+    events: UserEvent[],
+    meta: MetadataEntry,
+    info: InfoEntry,
+    transactions: TransactionEntry[]
+}>) {
+    let b_id = BigInt(id)
+    user && (items_getEntry(b_id).user = user)
+    events && (items_getEntry(b_id).events = events)
+    meta && (items_getEntry(b_id).meta = meta)
+    info && (items_getEntry(b_id).info = info)
+    transactions && (items_getEntry(b_id).transactions = transactions)
+}
+
+/**
+ * Delete an entry from the global entries map
+ * @see aio_delete()
+ * @param {bigint} item The id of the item to delete
+ */
+function items_delEntry(item: bigint) {
+    delete _globalsNewUi.entries[String(item)]
+}
+
+/**
+ * Adds an item to the global entries map
+ * @param item - the item to add
+*/
+function items_addItem(item: {
+    meta: MetadataEntry,
+    events: UserEvent[],
+    info: InfoEntry,
+    user: UserEntry,
+    transactions: TransactionEntry[],
+    children?: bigint[],
+    requirements?: bigint[],
+    copies?: bigint[],
+}) {
+    let e = _globalsNewUi.entries[String(item.user.ItemId)]
+    if (!e) {
+        e = new items_Entry(item.info, item.user, item.meta, item.events, item.transactions)
+        _globalsNewUi.entries[String(item.user.ItemId)] = e
+    } else {
+        e.info = item.info
+        e.user = item.user
+        e.meta = item.meta
+        e.events = item.events
+        e.transactions = item.transactions
+    }
+    if(item.children)
+        e.relations.setChildren(item.children)
+    if (item.copies)
+        e.relations.setCopies(item.copies)
+    if(item.requirements)
+        e.relations.setRequires(item.requirements)
+}
+
+function items_setItem(item:{
+    meta: MetadataEntry,
+    events: UserEvent[],
+    info: InfoEntry,
+    user: UserEntry,
+    transactions: TransactionEntry[],
+    children: bigint[],
+    requirements: bigint[],
+    copies: bigint[]
+}) {
+    let e = _globalsNewUi.entries[String(item.user.ItemId)]
+
+    if(!e) {
+        items_addItem(item)
+        return
+    }
+
+    e.info = item.info
+    e.meta = item.meta
+    e.user = item.user
+    e.transactions = item.transactions
+    e.events = item.events
+
+    e.relations.setChildren(item.children)
+    e.relations.setCopies(item.copies)
+    e.relations.setRequires(item.requirements)
+}
+
+/**
+ * Given an entry id, load all information about it (even if it has already been loaded)
+ * @param {bigint} id
+ * @param {number} uid the user id of the entry to load
+ * @param {boolean} force whether or not to force a reload
+ * @returns {Promise<items_Entry>}
+ */
+const _loading_ids = new Set
+async function items_loadAll(id: bigint, uid: number = 0, force = true): Promise<items_Entry> {
+    if(_loading_ids.has(id)) {
+        return await new Promise(res => {
+            var i = setInterval(() => {
+                if (_loading_ids.has(id)) return
+                clearInterval(i)
+                res(items_getEntry(id))
+            }, 16)
+        })
+    }
+
+    if(!force && items_entryExists(id)) {
+        return items_getEntry(id)
+    }
+
+    _loading_ids.add(id)
+    let e = await api_getEntryAll(id, uid)
+    items_getEntry(id).loadedTransactions = true
+    items_getEntry(id).loadedEvents = true
+    if(e) {
+        items_setItem(e)
+    }
+    _loading_ids.delete(id)
+    return items_getEntry(id)
+}
+
+/**
+ * Given an entry id, get it's user viewing info, if it has not been loaded, load it
+ * @param {bigint} id
+ * @param {number} uid the user id of the entry
+ * @returns {Promise<UserEntry>}
+ */
+async function items_getUserById(id: bigint, uid: number = 0): Promise<UserEntry> {
+    let u = findUserEntryById(id)
+    if(u.Extra.match(/"_AIO_GENERIC":true/)) {
+        let e = await items_loadAll(id, uid)
+        return e.user
+    }
+    return u
+}
+
+/**
+ * Given an entry id, get it's metadata, if it has not been loaded load it
+ * @param {bigint} id
+ * @returns {Promise<MetadataEntry>}
+ */
+async function items_getMetadataById(id: bigint): Promise<MetadataEntry> {
+    let m = findMetadataById(id)
+    if (m.Datapoints.match(/"_AIO_GENERIC":true/)) {
+        return (await items_loadAll(id)).meta
+    }
+    return m
+}
+
+async function items_getAllForIfNotGotten(ids: bigint[]): Promise<items_Entry[]> {
+    let notGotten = []
+    for(let id of ids) {
+        if(
+            findMetadataById(id).Datapoints.match(/"_AIO_GENERIC":true/) ||
+            findUserEntryById(id).Extra.match(/"_AIO_GENERIC":true/)
+        ) {
+            items_getEntry(id).loadedTransactions = true
+            items_getEntry(id).loadedEvents = true
+            notGotten.push(id)
+        }
+    }
+
+    if(!notGotten.length) {
+        let entries = []
+        for(let id of ids) {
+            entries.push(items_getEntry(id))
+        }
+        return entries
+    }
+
+    let items = await api_getEntriesAll(notGotten, 0)
+    if(typeof items === 'string') throw new Error(`failed to fetch data: ${items}`)
+    let entries = []
+    for(let item of items) {
+        items_updateEntryById(String(item.info.ItemId), item)
+        entries.push(items_getEntry(item.info.ItemId))
+    }
+    return entries
+}
+
+/**
+ * Checks if an id has been loaded into the global entries table
+ * @param {bigint} id
+ * @returns {boolean}
+*/
+function items_entryExists(id: bigint): boolean {
+    return String(id) in _globalsNewUi.entries && _globalsNewUi.entries[String(id)].loaded
+}
+
+/**
+ * Given an entry id, get it's corresponding object
+ * @param {bigint} id
+ * @returns {items_Entry}
+ */
+function items_getEntry(id: bigint): items_Entry {
+    const val = _globalsNewUi.entries[String(id)]
+    if (!(val)) {
+        console.warn(`${id} is not an entry or is not loaded`)
+        return _globalsNewUi.entries[String(id)] = items_Entry.createUnloaded(id)
+    }
+    return val
+}
+
+/**
+    * Gets an entry based on an item id
+    * if the entry is not loaded, load it
+    * ignores current user
+*/
+async function items_getEntryAny(id: bigint) {
+    let val = _globalsNewUi.entries[String(id)]
+    if (!(val) || !val.loaded) {
+        const stuff = await api_getEntryAll(id, 0)
+        if (!stuff) {
+            throw new Error(`${id} is not an entry`)
+        }
+        val = _globalsNewUi.entries[String(id)] = new items_Entry(
+            stuff.info, stuff.user, stuff.meta, stuff.events, stuff.transactions
+        )
+    }
+    return val
+}
+
+/**
+ * Gets the global entries map
+ * @returns {Record<string, items_Entry>}
+ */
+function items_getAllEntries(): Record<string, items_Entry> {
+    return _globalsNewUi.entries
+}
+
+/**
+    * Finds the metadata for an entry by item id
+    * If it can't find it, a generic metadata object is returned
+    * @param {bigint} id - the id to find metadata for
+    * @returns {MetadataEntry}
+*/
+function findMetadataById(id: bigint): MetadataEntry {
+    let e = items_getEntry(id)
+    return items_getEntry(id).meta || genericMetadata(e.info.MetadataId, e.info.Uid)
+}
+
+/**
+ * Given a metadata id, get that metadata
+ * @param {bigint} id
+ * @returns {MetadataEntry}
+ */
+function items_getMetadata(id: bigint): MetadataEntry {
+    if(!(String(id) in _globalsNewUi.metadata)) {
+        return genericMetadata(id, 0)
+    }
+    return _globalsNewUi.metadata[String(id)]
+}
+
+/**
+ * Given a metadata object, store it for future use
+ */
+function items_setMetadata(meta: MetadataEntry) {
+    _globalsNewUi.metadata[String(meta.ItemId)] = meta
+}
+
+/**
+    * Finds all transactions for a given item
+    * @param {bigint} id
+    * @returns {TransactionEntry[]}
+    */
+function findTransactionsById(id: bigint): TransactionEntry[] {
+    return items_getEntry(id).transactions || []
+}
+
+/**
+    * Finds the user info for an entry by id
+    * If it can't find it, a generic user info object is returned
+    * @param {bigint} id - the id to find user info for
+    * @returns {UserEntry}
+*/
+function findUserEntryById(id: bigint): UserEntry {
+    return items_getEntry(id).user || genericUserEntry(id, 0)
+}
+
+/**
+    * Finds the event list for an entry by id
+    * If it can't find it, an empty list is returned
+    * @param {bigint} id - the id to find events for
+    * @returns {UserEvent[]}
+*/
+function findUserEventsById(id: bigint): UserEvent[] {
+    return items_getEntry(id).events || []
+}
+
+/**
+    * Finds the info for an entry by id
+    * If it can't find it, a generic info object is returned
+    * @param {bigint} id - the id to find info for
+    * @returns {InfoEntry}
+*/
+function findInfoEntryById(id: bigint): InfoEntry {
+    return items_getEntry(id).info || genericInfo(id, 0)
+}
+
+/**
+ * Create a generic InfoEntry
+ * @param {bigint} itemId The item id of this entry
+ * @param {number} uid The user id of this entry
+ * @returns {InfoEntry}
+ */
+function genericInfo(itemId: bigint, uid: number): InfoEntry {
+    return {
+        Uid: uid,
+        ItemId: itemId,
+        Collection: "",
+        Format: 0,
+        ArtStyle: 0,
+        Location: "",
+        Native_Title: "",
+        Type: "Show",
+        En_Title: "",
+        Library: 0n,
+        RecommendedBy: "[]",
+        Priority: 0,
+        Format_Modifiers: 0,
+        MetadataId: 0n,
+
+        Tags: []
+    }
+}
+
+
+/**
+ * Create a generic MetadataEntry
+ * @param {bigint} itemId The item id of this entry
+ * @param {number} uid The user id of this entry
+ * @returns {MetadataEntry}
+ */
+function genericMetadata(itemId: bigint, uid: number): MetadataEntry {
+    return {
+        Uid: uid,
+        ItemId: itemId,
+        Rating: 0,
+        RatingMax: 0,
+        Description: "",
+        ReleaseYear: 0,
+        Thumbnail: "",
+        MediaDependant: "{}",
+        Datapoints: "{\"_AIO_GENERIC\":true}",
+        Title: "",
+        Native_Title: "",
+        Provider: "",
+        ProviderID: "",
+        Genres: "",
+        Country: "",
+    }
+}
+
+/**
+ * Create a generic UserEntry
+ * @param {bigint} itemId The item id of this entry
+ * @param {number} uid The user id of this entry
+ * @returns {UserEntry}
+ */
+function genericUserEntry(itemId: bigint, uid: number): UserEntry {
+    return {
+        Uid: uid,
+        ItemId: itemId,
+        Status: "",
+        ViewCount: 0,
+        UserRating: 0,
+        Notes: "",
+        CurrentPosition: "",
+        Extra: "{\"_AIO_GENERIC\":true}",
+        Minutes: 0
+    }
+}
+
+/**
+    * Puts the metadata for all entries in the global entries map into an object
+    * @returns a record with item ids for keys, and MetadataEntry values
+*/
+function items_getAllMeta() {
+    let meta: Record<string, MetadataEntry> = {}
+    for (let entry of Object.values(items_getAllEntries())) {
+        meta[String(entry.ItemId)] = entry.meta
+    }
+    return meta
+}
+
+/**
+ * Loads all relations from the api and updates all item's relations
+ * in the global entries map accordingly
+ * @see api_getRelations()
+ * @param {number} uid The uid to refresh relations of
+ */
+async function items_refreshRelations(uid: number) {
+    const relations = await api_getRelations(uid)
+    for (let r of relations) {
+        try {
+            const e = items_getEntry(r.ItemId)
+            e.relations.setChildren(r.Children?.map((v: any) => BigInt(v)) || [])
+            e.relations.setRequires(r.Requires?.map((v: any) => BigInt(v)) || [])
+            e.relations.setCopies(r.Copies?.map((v: any) => BigInt(v)) || [])
+        } catch (err) {
+            continue
+        }
+    }
+}
+
+/**
+    * loads all user info, and updates the global entries list
+*/
+async function items_refreshUserEntries(uid: number) {
+    for await(let item of api_streamList<UserEntry>("entry", uid, {
+        params: new URLSearchParams([["kind", "user"]])
+    })) {
+        try {
+            items_getEntry(item.ItemId).user = item
+        } catch (err) {
+            console.error(`${item.ItemId} is an orphaned user entry`)
+        }
+    }
+}
+
+/**
+    * loads all info, and updates the global entries list, creating new entries if they dont exist
+*/
+async function items_refreshInfoEntries(uid: number) {
+    for await(let item of api_streamList<InfoEntry>("entry", uid, {
+        params: new URLSearchParams([["kind", "info"]])
+    })) {
+        let stashed = _globalsNewUi.entries[String(item.ItemId)]
+        if (!stashed) {
+            _globalsNewUi.entries[String(item.ItemId)] = new items_Entry(item)
+        }
+        else {
+            stashed.info = item
+        }
+    }
+}
+
+/**
+    * loads all libraries, and puts them in the global libraries map
+*/
+async function items_loadLibraries(uid: number) {
+    const items = await api_queryV3(`type = 'Library' . entryInfo.uid = ${uid}`, uid)
+
+    for (let item of items) {
+        _globalsNewUi.libraries[String(item["ItemId"])] = item
+    }
+}
+
+/**
+ * loads all metadata info, and updates the global entries list
+ * WARNING: requires all entries to be loaded
+ * side effects:
+ * - fires aio-metadata-loaded after loading metadata
+ * @param {number} uid
+*/
+async function items_refreshMetadata(uid: number) {
+    let allmeta: Map<bigint, MetadataEntry> = new Map
+    for await(let item of api_streamList<MetadataEntry>("entry", uid, {
+        params: new URLSearchParams([["kind", "meta"]])
+    })) {
+        allmeta.set(item.ItemId, item)
+    }
+
+    for(let entry of Object.values(items_getAllEntries())) {
+        entry.meta = allmeta.get(entry.info.MetadataId) || genericMetadata(entry.info.MetadataId, entry.info.Uid)
+    }
+
+    dispatchEvent(new CustomEvent("aio-metadata-loaded"));
+}
+
+/**
+ * Finds the descendants of an item
+ * @param {bigint} itemId The item to find the descendants of
+ * @returns {Generator<items_Entry>}
+ */
+function* findDescendants(itemId: bigint): Generator<items_Entry> {
+    const entry = items_getEntry(itemId)
+    yield* entry.relations.findDescendants()
+}
+
+/**
+ * Finds the copies of an item
+ * @param {bigint} itemId The item to find the copies of
+ * @returns {Generator<items_Entry>}
+ */
+function* findCopies(itemId: bigint): Generator<items_Entry> {
+    const entry = items_getEntry(itemId)
+    yield* entry.relations.findCopies()
+}
+
+/**
+ * Finds the requirements of an item
+ * @param {bigint} itemId The item to find the requirements of
+ * @returns {Generator<items_Entry>}
+ */
+function* findRequirements(itemId: bigint): Generator<items_Entry> {
+    yield* items_getEntry(itemId).relations.findRequirements()
+}
+
+function* items_findRequiredBy(itemId: bigint): Generator<items_Entry> {
+    yield* items_getEntry(itemId).relations.requiredBy.values().map(items_getEntry)
+}
+
+/**
+ * Gets a list of recommenders for an item
+ * @param {bigint} itemId The item to get the recommenders of
+ * @returns {string[]}
+ */
+function items_getRecommendedBy(itemId: bigint): string[] {
+    let entry = items_getEntry(itemId)
+    return JSON.parse(entry.info.RecommendedBy)
+}
+
+/**
+ * Adds a recommender to an item's list of recommenders in the global entries map
+ * @see newRecommendedByUI()
+ * @param {bigint} itemId The item to add the recommender to
+ * @param {string} recommender The recommender
+ */
+function items_addRecommendedBy(itemId: bigint, recommender: string) {
+    let entry = items_getEntry(itemId)
+    let r = JSON.parse(entry.info.RecommendedBy)
+    r.push(recommender)
+    entry.info.RecommendedBy = JSON.stringify(r)
+}
+
+/**
+ * Loads all events for a user, and updates the global map accordingly
+ * @param {number} uid The user to load the events for
+ */
+async function loadUserEvents(uid: number) {
+    const events = await api_loadList<UserEvent>("entry", uid,  {
+        params: new URLSearchParams([["kind", "events"]])
+    })
+    const grouped = Object.groupBy(events, k => String(k.ItemId))
+    for (let entry in items_getAllEntries()) {
+        //we must loop through all entries because :
+        //if an item had an event, but now has 0 events, if we loop through the new events, it will never hit that item that now has no events
+        //therefore it will never be updated
+        items_getEntry(BigInt(entry)).events = grouped[entry] || []
+    }
+}
+
+async function items_loadTransactionsFor(itemIds: bigint[], uid: number = 0, force: boolean = true) {
+    let promises = []
+    for(let id of itemIds) {
+        if (!items_getEntry(id).loadedTransactions || force)
+            promises.push(api_loadList<TransactionEntry>(`entry/${id}/transactions`, uid, ))
+        items_getEntry(id).loadedTransactions = true
+    }
+    for(let transactionList of await Promise.all(promises)) {
+        if(!transactionList.length) continue
+        items_updateEntryById(String(transactionList[0].ItemId), { transactions: transactionList })
+    }
+}
+
+async function items_loadEventsFor(itemIds: bigint[], uid: number = 0, force: boolean = true) {
+    let promises = []
+    for(let id of itemIds) {
+        if (!items_getEntry(id).loadedEvents || force)
+            promises.push(api_loadList<UserEvent>(`entry/${id}/events`, uid, ))
+        items_getEntry(id).loadedEvents = true
+    }
+    for(let eventList of await Promise.all(promises)) {
+        if(!eventList.length) continue
+        items_updateEntryById(String(eventList[0].ItemId), { events: eventList })
+    }
+}
+
+async function loadTransactions(uid: number) {
+    const transactions = await api_loadList<TransactionEntry>("entry", uid, {
+        params: new URLSearchParams([["kind", "transactions"]])
+    })
+    const grouped = Object.groupBy(transactions, k => String(k.ItemId))
+    for(let entry in items_getAllEntries()) {
+        items_getEntry(BigInt(entry)).transactions = grouped[entry] || []
+    }
+}
+
+/**
+ * Sorts a list of events by timestamp (does not account for BeforeTs)
+ * @param {UserEvent[]} events The list of events to sort
+ * @returns {UserEvent[]}
+ */
+function sortEvents(events: UserEvent[]): UserEvent[] {
+    return events.sort((a, b) => {
+        let at = a.Timestamp || a.After
+        let bt = b.Timestamp || b.After
+        return at - bt
+    })
+}
+
+const sorts = new Map<string, ((a: InfoEntry, b: InfoEntry) => number)>
+
+sorts.set("priority", (a, b) => b.Priority - a.Priority)
+
+sorts.set("rating", (a, b) => {
+    let aUInfo = findUserEntryById(a.ItemId)
+    let bUInfo = findUserEntryById(b.ItemId)
+    if (!aUInfo || !bUInfo) return 0
+    return bUInfo?.UserRating - aUInfo?.UserRating
+})
+
+for (let event of ["Added", "Finished", "Planned"]) {
+    sorts.set(event.toLowerCase(), (a, b) => {
+        let ae = findUserEventsById(a.ItemId).findLast(v => v.Event === event)
+        let be = findUserEventsById(b.ItemId).findLast(v => v.Event === event)
+        return items_compareEventTiming(ae || 0, be || 0)
+    })
+}
+
+sorts.set("Started", (a, b) => {
+    let ae = findUserEventsById(a.ItemId).findLast(v => ["Started", "Viewing"].includes(v.Event))
+    let be = findUserEventsById(b.ItemId).findLast(v => ["Started", "Viewing"].includes(v.Event))
+    return items_compareEventTiming(ae || 0, be || 0)
+})
+
+sorts.set("general-rating", (a, b) => {
+    let am = findMetadataById(a.ItemId)
+    let bm = findMetadataById(b.ItemId)
+    return ((bm.Rating / bm.RatingMax) || 0) - ((am.Rating / am.RatingMax) || 0)
+})
+
+sorts.set("release-year", (a, b) => {
+    let am = findMetadataById(a.ItemId)
+    let bm = findMetadataById(b.ItemId)
+    return bm.ReleaseYear - am.ReleaseYear
+})
+
+sorts.set("cost", (a, b) => {
+    let transa = items_getEntry(a.ItemId).getLastPurchasePrice()
+    let transb = items_getEntry(b.ItemId).getLastPurchasePrice()
+    return transb - transa
+})
+
+sorts.set("item-id", (a, b) => Number(b.ItemId - a.ItemId))
+
+sorts.set("rating-disparity", (a, b) => {
+    let am = findMetadataById(a.ItemId)
+    let au = findUserEntryById(a.ItemId)
+    let bm = findMetadataById(b.ItemId)
+    let bu = findUserEntryById(b.ItemId)
+    if (!bm || !am) return 0
+    let bGeneral = items_normalizeRating(bm.Rating, bm.RatingMax || 100)
+    let aGeneral = items_normalizeRating(am.Rating, am.RatingMax || 100)
+
+    let aUser = Number(au?.UserRating)
+    let bUser = Number(bu?.UserRating)
+
+
+    return (aGeneral - aUser) - (bGeneral - bUser)
+})
+
+sorts.set("user-title", (a, b) => {
+    return a.En_Title < b.En_Title ? 0 : 1
+})
+
+sorts.set("minutes", (a, b) => {
+    return findUserEntryById(a.ItemId).Minutes - findUserEntryById(b.ItemId).Minutes
+})
+
+sorts.set("native-title", (a, b) => {
+    let am = findMetadataById(a.ItemId)
+    let bm = findMetadataById(b.ItemId)
+    let at = am.Native_Title || a.Native_Title
+    let bt = bm.Native_Title || b.Native_Title
+    if (at === "") {
+        return bt ? 1 : 0
+    }
+    if (bt === "") {
+        return at ? 0 : 1
+    }
+    return at < bt ? 0 : 1
+})
+
+sorts.set("-aiow-numeric-title", (a, b) => {
+    let at = a.En_Title || a.Native_Title
+    let bt = b.En_Title || b.Native_Title
+
+    const search = /\d+/
+    let an = at.match(search)?.[0]
+    let bn = bt.match(search)?.[0]
+    return (Number(an) - Number(bn)) || 1
+})
+
+/**
+    * adds a new sort method that sortEntries can use
+    * @param {string} name - the name of the sort
+    * @param {((a: InfoEntry, b: InfoEntry) => number} sortFN - the function that does the sorting
+*/
+function items_addSort(name: string, sortFN: ((a: InfoEntry, b: InfoEntry) => number), category = "custom") {
+    sorts.set(`-aiow-${name}`, sortFN)
+    return `-aiow-${name}`
+}
+
+/**
+    * deletes a sort method
+    * @param {string} name - the sort to delete
+*/
+function items_delSort(name: string) {
+    sorts.delete(name)
+}
+
+/**
+    * sorts a list of entries
+    * @param {InfoEntry[]} entries - the entries to sort
+    * @param {string} sortBy - the sorting method to use
+*/
+function sortEntries(entries: InfoEntry[], sortBy: string) {
+    if (sortBy === "") return entries
+
+    let customSort = sorts.get(sortBy)
+    if (customSort) {
+        entries = entries.sort(customSort)
+    }
+    return entries
+}
+
+/**
+    * converts an item type to a symbol
+    * @param {string} type - the type to convert
+    * @returns {string} - a 1 character symbol
+*/
+function typeToSymbol(type: string): string {
+    const conversion = {
+        "Show": "📺︎",
+        "Movie": "📽",
+        "MovieShort": "⏯",
+        "Book": "📚︎",
+        "ShortStory": "S📚︎",
+        "Manga": "本",
+        "Game": "🎮︎",
+        "Song": "♫",
+        "Collection": "🗄",
+        "BoardGame": "🎲︎",
+        "Picture": "🖼",
+        "Meme": "🃏",
+        "Video": "📼",
+        "Album": "A♫",
+        "Soundtrack": "📺︎♫",
+        "Unowned": "X",
+    }
+    if (type in conversion) {
+        return conversion[type as keyof typeof conversion]
+    }
+    return type
+}
+
+/**
+ * Creates a human readable representation of modifiers
+ * @param {number} modifiers
+ * @returns string
+ */
+function items_formatModifiersToName(modifiers: number): string {
+    let out = ""
+    for(let mod of items_F_MODS) {
+        if(items_hasFMod(modifiers, mod)) {
+            out += `+${{[items_F_DIGI_MOD]: "d", [items_F_UNOWNED_MOD]: "u"}[mod]}`
+        }
+    }
+    return out
+}
+
+/**
+    * converts an item format to a symbol
+    * @param {string} format - the type to convert
+    * @returns {string} - a symbol with an optional `+d`
+*/
+function items_formatToSymbol(format: number, modifiers: number): string {
+    let out = items_formatModifiersToName(modifiers)
+    return {
+        0: "📼",
+        1: "💿︎",
+        2: "📀︎",
+        3: "<font color='#007fb6'>📀︎</font>",
+        4: "4K<font color='#007fb6'>📀︎</font>",
+        5: "本",
+        6: "📚︎",
+        7: "🖥️",
+        8: "🎲",
+        9: "S",
+        10: "NS",
+        11: "X1",
+        12: "X360",
+        13: "🤷",
+        14: "V💿︎",
+        15: "🖼️",
+        16: "🚫",
+        17: "🎞",
+        18: "W",
+        19: "DS",
+        20: "PS1",
+        21: "PS2",
+        22: "PS3",
+        23: "PS4",
+        24: "PS5",
+        25: "S2",
+        26: "EG",
+        27: "G",
+        28: "WU"
+    }[format] + out
+}
+
+/**
+ * If the url is a relative path, make it an absolute path using this server
+ * @param {string} url The url to fix
+ * @returns {string}
+ */
+function fixThumbnailURL(url: string): string {
+    //a / url assumes that the aio server is the same as the web server
+    if (url.startsWith("/")) {
+        return `${AIO}${url}`
+    }
+    return url
+}
+
+/**
+    * converts an item format to a human readable name
+    * @param {number} format - the format
+    * @returns {Promise<string>}
+*/
+async function formatToName(format: number, modifiers: number): Promise<string> {
+    let out = items_formatModifiersToName(modifiers)
+
+    const formats = await api_listFormats()
+
+    if (format > Object.keys(formats).length || format < 0) {
+        return `unknown${out}`
+    }
+    return `${formats[format].toUpperCase()}${out}`
+}
+
+/**
+    * converts an item format to a human readable name
+    * IMPORTANT: relies on api_listFormats having been called earlier
+    * @param {number} format - the format
+    * @returns {Promise<string>}
+*/
+function items_formatToNameCached(format: number, modifiers: number): string {
+    let out = items_formatModifiersToName(modifiers)
+    let formats = _api_formats_cache
+    if (format > Object.keys(formats).length) {
+        return `unknown${out}`
+    }
+    return `${formats[format].toUpperCase()}${out}`
+}
+
+/**
+ * Checks if an item is marked as digitized
+ * @param {number} format The format of the item
+ * @returns {boolean}
+ */
+function items_isDigitized(format: number): boolean {
+    return items_hasFMod(format, items_F_DIGI_MOD)
+}
+
+/**
+ * Checks if mod is one of the modifiers
+ * @param {number} modifiers the bitfield of format modifiers
+ * @param {number} mod the modifier to check for
+ * @returns {boolean}
+*/
+function items_hasFMod(modifiers: number, mod: number): boolean {
+    return (modifiers & mod) == mod
+}
+
+/**
+ * Converts a format name to a number format
+ * @param {string} name The name to convert
+ * @returns {PRomise<number>}
+ */
+async function nameToFormat(name: string): Promise<[number, number]> {
+    let mods =0
+    let val = 0
+    name = name.toLowerCase()
+    if (name.includes("+digital")) {
+        name = name.replace("+digital", "")
+        mods |= items_F_DIGI_MOD
+    }
+
+    const formats = Object.fromEntries(Object.entries(await api_listFormats()).map(([k, v]) => [v, Number(k)]))
+
+    val |= formats[name as keyof typeof formats]
+    return [val, mods]
+}
+
+const items_reduce_SELF = 1n << 0n
+const items_reduce_CHILDREN = 1n << 1n
+const items_reduce_COPIES = 1n << 2n
+const items_reduce_REQUIRES = 1n << 3n
+
+/**
+ * Like Array.reduce, but the reduction function is called per item related to itemId according to the include* parameters
+ * @param {bigint} itemId - the starting item id
+ * @param {bigint} include - a bitmask of kinds of entries to include, items_reduce_{SELF,CHILDREN,COPIES,REQUIRES}
+ * @param {boolean} recursive - whether or not to apply this function to copies and children (if include{copies,children} are true)
+ * @param {((p: T, c: bigint) => T)} reduction - the reducer function
+ * @param {T} initial the starting value
+ * @param {Set<bigint>} [visited] the set of already visited items to prevent infinite recursion
+ */
+function items_reduce<T>(itemId: bigint, include: bigint, recursive: boolean, reduction: ((p: T, c: bigint) => T), initial: T, visited: Set<bigint> = new Set): T {
+    if(visited.has(itemId)) return initial
+    visited.add(itemId)
+    const includeSelf = (include & items_reduce_SELF) > 0
+    const includeChildren = (include & items_reduce_CHILDREN) > 0
+    const includeCopies = (include & items_reduce_COPIES) > 0
+    const includeRequires = (include & items_reduce_REQUIRES) > 0
+    if (includeSelf) {
+        initial = reduction(initial, itemId)
+    }
+    if (includeChildren) {
+        for (let child of findDescendants(itemId)) {
+            if (recursive) {
+                initial = items_reduce(child.ItemId, include, true, reduction, initial, visited)
+            } else {
+                initial = reduction(initial, child.ItemId)
+            }
+        }
+    }
+    if (includeCopies) {
+        for (let copy of findCopies(itemId)) {
+            if (recursive) {
+                initial = items_reduce(copy.ItemId, include, true, reduction, initial, visited)
+            } else {
+                initial = reduction(initial, copy.ItemId)
+            }
+        }
+    }
+    if (includeRequires) {
+        for (let requirement of findRequirements(itemId)) {
+            if (recursive) {
+                initial = items_reduce(requirement.ItemId, include, true, reduction, initial, visited)
+            } else {
+                initial = reduction(initial, requirement.ItemId)
+            }
+        }
+    }
+    return initial
+}
+
+/**
+ * Gets a list of all events related to itemid
+ * @param {bigint} itemId - the item id to find the events of
+ * @param {bigint} include - a bitmask of kinds of entries to include, items_reduce_{SELF,CHILDREN,COPIES,REQUIRES}
+ * @param {boolean} recursive - if includeChildren is set, apply this function to all of its children
+ * @returns {UserEvent[]}
+*/
+function items_findAllEvents(itemId: bigint, include: bigint, recursive: boolean): UserEvent[] {
+    return items_reduce(itemId, include, recursive, (p, c) => p.concat(findUserEventsById(c)), [] as UserEvent[])
+}
+
+/**
+ * Calculate the total cost of an item
+ * @param {bigint} itemId - the item id to find the cost of
+ * @param {bigint} include - a bitmask of kinds of entries to include, items_reduce_{SELF,CHILDREN,COPIES,REQUIRES}
+ * @param {boolean} recursive - if includeChildren is set, apply this function to all of its children
+ * @returns {number}
+*/
+function items_calculateCost(itemId: bigint, include: bigint, recursive: boolean): number {
+    if (Math.sumPrecise) {
+        let items =
+            items_reduce<number[]>(
+                itemId,
+                include,
+                recursive,
+                (p, c) => {
+                    p.push(items_sumTransactions(c))
+                    return p
+                },
+                []
+            )
+        return Math.sumPrecise(
+            items
+        )
+    }
+    return items_reduce(itemId, include, recursive, (p, c) => p + items_sumTransactions(c), 0)
+}
+
+/**
+ * Estimates a time for an event (not all events have the Timestamp field set)
+ * @param {UserEvent} event The event to estimate the time of occurance
+ * @returns {number}
+ */
+function items_eventTimeEstimate(event: UserEvent): number {
+    if (event.Timestamp) {
+        return event.Timestamp
+    }
+
+    if (event.Before && event.After) {
+        return (event.Before + event.After) / 2
+    }
+
+    if (event.Before) {
+        return event.Before - 1
+    }
+    if (event.After) {
+        return event.After - 1
+    }
+    return 0
+}
+
+/**
+ * Compares 2 event's times
+ * @param {UserEvent} left
+ * @param {UserEvent} right
+ * @returns n < 0 if left occured AFTER right
+ * @returns 0 if they occured at the same time
+ * @returns n > 0 if left occured BEFORE right
+ */
+function items_compareEventTiming(left: UserEvent | number, right: UserEvent | number): number {
+    let l = typeof left !== 'number' ? items_eventTimeEstimate(left) : left
+    let r = typeof right !== 'number' ? items_eventTimeEstimate(right) : right
+    let defaultTZ = INTL_OPTIONS.timeZone === "Etc/Unknown" ?
+        "Atlantic/Reykjavik"
+        : INTL_OPTIONS.timeZone
+
+    return Number(time_compare(
+        BigInt(l) * 1000000n,
+        (typeof left !== 'number' && left.TimeZone) || defaultTZ,
+        BigInt(r) * 1000000n,
+        (typeof right !== 'number' && right.TimeZone) || defaultTZ
+    ))
+}
+
+/**
+ * Converts an event into a string representing the event
+ * @param {UserEvent} event The event
+ * @returns {string}
+ */
+function items_eventTSText(event: UserEvent): string {
+    let ts = event.Timestamp
+    const afterts = event.After
+    const beforets = event.Before
+    const timeZone = event.TimeZone || "UTC"
+    let text = ""
+    const mktime = (timestamp: number) => {
+        let date = new Date(timestamp)
+        let time = date.toLocaleTimeString("en", { timeZone: event.TimeZone })
+        return timeZone ? `${time} (${event.TimeZone})` : String(time)
+    }
+    if (afterts) {
+        text += mktime(afterts) + " < "
+    }
+
+    text += ts
+        ? mktime(ts)
+        : " ? " //if there is no exact timestamp, put a ? in the middle of afterts and beforets
+
+    if (beforets) {
+        text += " < " + mktime(beforets)
+    }
+
+    return text
+}
+
+/**
+ * Converts an event to an HTML string that represents it
+ * @param {UserEvent} event The event
+ * @returns {string}
+ */
+function items_eventTSHTML(event: UserEvent): string {
+    const ts = event.Timestamp
+    const afterts = event.After
+    const beforets = event.Before
+    const timeZone = event.TimeZone || "UTC"
+    let innerTD = ""
+
+    const mktime = (timestamp: number) => {
+        let date = new Date(timestamp)
+        let time = date.toLocaleTimeString("en", { timeZone: event.TimeZone })
+        let dd = date.toLocaleDateString("en", { timeZone: event.TimeZone })
+        return `<time title="${time} (${timeZone})" datetime="${date.toISOString()}">${dd}</time>`
+    }
+
+    if (afterts) {
+        innerTD += mktime(afterts) + " &lt; "
+    }
+
+    innerTD += ts
+        ? mktime(ts)
+        : " ? " //if there is no exact timestamp, put a ? in the middle of afterts and beforets
+
+    if (beforets) {
+        innerTD += " &lt; " + mktime(beforets)
+    }
+
+    return innerTD
+}
+
+function _cononicalizeEvent(event: UserEvent) {
+    return `${event.ItemId}>>${event.Event}:${event.Before}:${event.Timestamp}:${event.After}Z${event.TimeZone}`
+}
+
+/**
+    * Checks if 2 events are the same
+    * @param {UserEvent} left
+    * @param {UserEvent} right
+    * @returns {boolean}
+*/
+function items_eventEQ(left: UserEvent, right: UserEvent): boolean {
+    return _cononicalizeEvent(left) == _cononicalizeEvent(right)
+}
+
+/**
+ * Checks if an item has a specific art style
+ * @param {InfoEntry} item The item to check
+ * @param {ArtStyle} artStyle The art style
+ */
+function items_hasArtStyle(item: InfoEntry, artStyle: ArtStyle) {
+    return (item.ArtStyle & artStyle) === artStyle
+}
+
+function items_artStyle2Int(artStyles: ASName[]): number {
+    let res = 0
+    for (let as_ of artStyles) {
+        res |= {
+            "2d": AS_2D,
+            "cgi": AS_CGI,
+            "digital": AS_DIGITAL,
+            "handrawn": AS_HANDRAWN,
+            "cartoon": AS_CARTOON,
+            "3d": AS_3D,
+            "anime": AS_ANIME,
+            "liveaction": AS_LIVE_ACTION,
+        }[as_.toLowerCase()] || 0
+    }
+    return res
+}
+
+/**
+ * Adds an art style by name to an item
+ * @param {InfoEntry} item The item to add an art style to
+ * @param {ASName} artStyle The art style to add
+ * @returns {InfoEntry}
+ */
+function items_setArtStyle(item: InfoEntry, artStyle: ASName): InfoEntry {
+    switch (artStyle) {
+        case "Anime":
+            item.ArtStyle |= AS_ANIME
+            break
+        case "Cartoon":
+            item.ArtStyle |= AS_CARTOON
+            break
+        case "Handrawn":
+            item.ArtStyle |= AS_HANDRAWN
+            break
+        case "Digital":
+            item.ArtStyle |= AS_DIGITAL
+            break
+        case "CGI":
+            item.ArtStyle |= AS_CGI
+            break
+        case "Liveaction":
+            item.ArtStyle |= AS_LIVE_ACTION
+            break
+        case "2D":
+            item.ArtStyle |= AS_2D
+            break
+        case "3D":
+            item.ArtStyle |= AS_3D
+            break
+    }
+    return item
+}
+
+/**
+ * Removes an art style by name to an item
+ * @param {InfoEntry} item The item to remove an art style from
+ * @param {ASName} artStyle The art style to remove
+ */
+function items_unsetArtStyle(item: InfoEntry, artStyle: ASName) {
+    switch (artStyle) {
+        case "Anime":
+            item.ArtStyle -= AS_ANIME
+            break
+        case "Cartoon":
+            item.ArtStyle -= AS_CARTOON
+            break
+        case "Handrawn":
+            item.ArtStyle -= AS_HANDRAWN
+            break
+        case "Digital":
+            item.ArtStyle -= AS_DIGITAL
+            break
+        case "CGI":
+            item.ArtStyle -= AS_CGI
+            break
+        case "Liveaction":
+            item.ArtStyle -= AS_LIVE_ACTION
+            break
+    }
+}
+
+function setUserExtra(user: UserEntry, prop: string, value: string) {
+    let extra = JSON.parse(user.Extra)
+    let AIOWeb = extra.AIOWeb || {}
+
+    //the user can modify this field in the object editor, but it MUST be an object
+    if (typeof AIOWeb !== "object") {
+        AIOWeb = {}
+    }
+
+    AIOWeb[prop] = value
+    extra.AIOWeb = AIOWeb
+    user.Extra = JSON.stringify(extra)
+}
+
+function getAIOWeb(user: UserEntry) {
+    return JSON.parse(user.Extra).AIOWeb || {}
+}
+
+function getUserExtra(user: UserEntry, prop: string) {
+    try {
+        return getAIOWeb(user)[prop] || null
+    }
+    catch (err) {
+        console.error(err)
+        return null
+    }
+}
+
+
+/**
+ * Gets a list of events for items that happened within a time range
+ * @param {InfoEntry[]} items The items to pull events from
+ * @param {number} start The starting unix time stamp
+ * @param {number} end the Ending unix time stamp
+ * @returns {Generator<UserEvent>}
+ */
+function* items_getEventsWithinTimeRange(items: InfoEntry[], start: number, end: number): Generator<UserEvent> {
+    for (let item of items) {
+        const events = findUserEventsById(item.ItemId)
+        for (let ev of events) {
+            if (items_compareEventTiming(ev, start) <= 0 && items_compareEventTiming(ev, end) >= 0) {
+                yield ev
+            }
+        }
+    }
+}
+
+/**
+* @description Grabs the sequence number from a string, given a list of all items in the sequence
+* @returns {number | null}
+*/
+function items_sequenceNumberGrabber(text: string, allItems: string[]): number | null {
+    //match sequence indicator (non-word character, vol/ova/e/s)
+    //followed by sequence number (possibly a float)
+    //followed by non-word character
+    //eg: S01
+    //eg: E6.5
+    const regex = /(?:[\W_\-\. EesS]|[Oo][Vv][Aa]|[Vv](?:[Oo][Ll])?\.?)?(\d+(?:\.\d+)?)[\W_\-\. ]?/g
+
+    const matches = text.matchAll(regex).toArray()
+    if (matches[0] == null) {
+        return null
+    }
+    return Number(matches.filter(match => {
+        for (let item of allItems) {
+            if (item === text) continue
+
+            if (item.includes(match[0]))
+                return false
+            return true
+        }
+    })[0][1])
+}
+
+function items_countryOfOrigin2Flag(origin: string) {
+    const flags = {
+        "Japan": "🇯🇵",
+        "JP": "🇯🇵",
+        "CA": "🇨🇦",
+        "Canada": "🇨🇦",
+        "United States": "🇺🇸",
+        "US": "🇺🇸",
+        "USA": "🇺🇸",
+        "United Kingdom": "🇬🇧",
+        "South Korea": "🇰🇷",
+        "Netherlands": "🇳🇱",
+        "Ireland": "🇮🇪",
+        "France": "🇫🇷",
+        "Belgium": "🇧🇪",
+        "Sweden": "🇸🇪",
+        "Denmark": "🇩🇰",
+        "Luxembourg": "🇱🇺",
+        "Brazil": "🇧🇷",
+        "Italy": "🇮🇹",
+        "New Zealand": "🇳🇿",
+        "Hungary": "🇭🇺",
+        "Hong Kong": "🇭🇰",
+        "China": "🇨🇳",
+        "Ascension Island": "🇦🇨",
+        "Andorra": "🇦🇩",
+        "United Arab Emirates": "🇦🇪",
+        "Afghanistan": "🇦🇫",
+        "Antigua & Barbuda": "🇦🇬",
+        "Anguilla": "🇦🇮",
+        "Albania": "🇦🇱",
+        "Armenia": "🇦🇲",
+        "Angola": "🇦🇴",
+        "Antarctica": "🇦🇶",
+        "Argentina": "🇦🇷",
+        "American Samoa": "🇦🇸",
+        "Austria": "🇦🇹",
+        "Australia": "🇦🇺",
+        "Aruba": "🇦🇼",
+        "Åland Islands": "🇦🇽",
+        "Azerbaijan": "🇦🇿",
+        "Bosnia & Herzegovina": "🇧🇦",
+        "Barbados": "🇧🇧",
+        "Bangladesh": "🇧🇩",
+        "Burkina Faso": "🇧🇫",
+        "Bulgaria": "🇧🇬",
+        "Bahrain": "🇧🇭",
+        "Burundi": "🇧🇮",
+        "Benin": "🇧🇯",
+        "St. Barthélemy": "🇧🇱",
+        "Bermuda": "🇧🇲",
+        "Brunei": "🇧🇳",
+        "Bolivia": "🇧🇴",
+        "Caribbean Netherlands": "🇧🇶",
+        "Bahamas": "🇧🇸",
+        "Bhutan": "🇧🇹",
+        "Bouvet Island": "🇧🇻",
+        "Botswana": "🇧🇼",
+        "Belarus": "🇧🇾",
+        "Belize": "🇧🇿",
+        "Cocos (Keeling) Islands": "🇨🇨",
+        "Congo - Kinshasa": "🇨🇩",
+        "Central African Republic": "🇨🇫",
+        "Congo - Brazzaville": "🇨🇬",
+        "Switzerland": "🇨🇭",
+        "Côte d’Ivoire": "🇨🇮",
+        "Cook Islands": "🇨🇰",
+        "Chile": "🇨🇱",
+        "Cameroon": "🇨🇲",
+        "Colombia": "🇨🇴",
+        "Clipperton Island": "🇨🇵",
+        "Sark": "🇨🇶",
+        "Costa Rica": "🇨🇷",
+        "Cuba": "🇨🇺",
+        "Cape Verde": "🇨🇻",
+        "Curaçao": "🇨🇼",
+        "Christmas Island": "🇨🇽",
+        "Cyprus": "🇨🇾",
+        "Czechia": "🇨🇿",
+        "Germany": "🇩🇪",
+        "Diego Garcia": "🇩🇬",
+        "Djibouti": "🇩🇯",
+        "Dominica": "🇩🇲",
+        "Dominican Republic": "🇩🇴",
+        "Algeria": "🇩🇿",
+        "Ceuta & Melilla": "🇪🇦",
+        "Ecuador": "🇪🇨",
+        "Estonia": "🇪🇪",
+        "Egypt": "🇪🇬",
+        "Western Sahara": "🇪🇭",
+        "Eritrea": "🇪🇷",
+        "Spain": "🇪🇸",
+        "Ethiopia": "🇪🇹",
+        "European Union": "🇪🇺",
+        "Finland": "🇫🇮",
+        "Fiji": "🇫🇯",
+        "Falkland Islands": "🇫🇰",
+        "Micronesia": "🇫🇲",
+        "Faroe Islands": "🇫🇴",
+        "Gabon": "🇬🇦",
+        "Grenada": "🇬🇩",
+        "Georgia": "🇬🇪",
+        "French Guiana": "🇬🇫",
+        "Guernsey": "🇬🇬",
+        "Ghana": "🇬🇭",
+        "Gibraltar": "🇬🇮",
+        "Greenland": "🇬🇱",
+        "Gambia": "🇬🇲",
+        "Guinea": "🇬🇳",
+        "Guadeloupe": "🇬🇵",
+        "Equatorial Guinea": "🇬🇶",
+        "Greece": "🇬🇷",
+        "South Georgia & South Sandwich Islands": "🇬🇸",
+        "Guatemala": "🇬🇹",
+        "Guam": "🇬🇺",
+        "Guinea-Bissau": "🇬🇼",
+        "Guyana": "🇬🇾",
+        "Hong Kong SAR China": "🇭🇰",
+        "Heard & McDonald Islands": "🇭🇲",
+        "Honduras": "🇭🇳",
+        "Croatia": "🇭🇷",
+        "Haiti": "🇭🇹",
+        "Canary Islands": "🇮🇨",
+        "Indonesia": "🇮🇩",
+        "Israel": "🇮🇱",
+        "Isle of Man": "🇮🇲",
+        "India": "🇮🇳",
+        "British Indian Ocean Territory": "🇮🇴",
+        "Iraq": "🇮🇶",
+        "Iran": "🇮🇷",
+        "Iceland": "🇮🇸",
+        "Jersey": "🇯🇪",
+        "Jamaica": "🇯🇲",
+        "Jordan": "🇯🇴",
+        "Kenya": "🇰🇪",
+        "Kyrgyzstan": "🇰🇬",
+        "Cambodia": "🇰🇭",
+        "Kiribati": "🇰🇮",
+        "Comoros": "🇰🇲",
+        "St. Kitts & Nevis": "🇰🇳",
+        "North Korea": "🇰🇵",
+        "Kuwait": "🇰🇼",
+        "Cayman Islands": "🇰🇾",
+        "Kazakhstan": "🇰🇿",
+        "Laos": "🇱🇦",
+        "Lebanon": "🇱🇧",
+        "St. Lucia": "🇱🇨",
+        "Liechtenstein": "🇱🇮",
+        "Sri Lanka": "🇱🇰",
+        "Liberia": "🇱🇷",
+        "Lesotho": "🇱🇸",
+        "Lithuania": "🇱🇹",
+        "Latvia": "🇱🇻",
+        "Libya": "🇱🇾",
+        "Morocco": "🇲🇦",
+        "Monaco": "🇲🇨",
+        "Moldova": "🇲🇩",
+        "Montenegro": "🇲🇪",
+        "St. Martin": "🇲🇫",
+        "Madagascar": "🇲🇬",
+        "Marshall Islands": "🇲🇭",
+        "North Macedonia": "🇲🇰",
+        "Mali": "🇲🇱",
+        "Myanmar (Burma)": "🇲🇲",
+        "Mongolia": "🇲🇳",
+        "Macao SAR China": "🇲🇴",
+        "Northern Mariana Islands": "🇲🇵",
+        "Martinique": "🇲🇶",
+        "Mauritania": "🇲🇷",
+        "Montserrat": "🇲🇸",
+        "Malta": "🇲🇹",
+        "Mauritius": "🇲🇺",
+        "Maldives": "🇲🇻",
+        "Malawi": "🇲🇼",
+        "Mexico": "🇲🇽",
+        "Malaysia": "🇲🇾",
+        "Mozambique": "🇲🇿",
+        "Namibia": "🇳🇦",
+        "New Caledonia": "🇳🇨",
+        "Niger": "🇳🇪",
+        "Norfolk Island": "🇳🇫",
+        "Nigeria": "🇳🇬",
+        "Nicaragua": "🇳🇮",
+        "Norway": "🇳🇴",
+        "Nepal": "🇳🇵",
+        "Nauru": "🇳🇷",
+        "Niue": "🇳🇺",
+        "Oman": "🇴🇲",
+        "Panama": "🇵🇦",
+        "Peru": "🇵🇪",
+        "French Polynesia": "🇵🇫",
+        "Papua New Guinea": "🇵🇬",
+        "Philippines": "🇵🇭",
+        "Pakistan": "🇵🇰",
+        "Poland": "🇵🇱",
+        "St. Pierre & Miquelon": "🇵🇲",
+        "Pitcairn Islands": "🇵🇳",
+        "Puerto Rico": "🇵🇷",
+        "Palestinian Territories": "🇵🇸",
+        "Portugal": "🇵🇹",
+        "Palau": "🇵🇼",
+        "Paraguay": "🇵🇾",
+        "Qatar": "🇶🇦",
+        "Réunion": "🇷🇪",
+        "Romania": "🇷🇴",
+        "Serbia": "🇷🇸",
+        "Russia": "🇷🇺",
+        "Rwanda": "🇷🇼",
+        "Saudi Arabia": "🇸🇦",
+        "Solomon Islands": "🇸🇧",
+        "Seychelles": "🇸🇨",
+        "Sudan": "🇸🇩",
+        "Singapore": "🇸🇬",
+        "St. Helena": "🇸🇭",
+        "Slovenia": "🇸🇮",
+        "Svalbard & Jan Mayen": "🇸🇯",
+        "Slovakia": "🇸🇰",
+        "Sierra Leone": "🇸🇱",
+        "San Marino": "🇸🇲",
+        "Senegal": "🇸🇳",
+        "Somalia": "🇸🇴",
+        "Suriname": "🇸🇷",
+        "South Sudan": "🇸🇸",
+        "São Tomé & Príncipe": "🇸🇹",
+        "El Salvador": "🇸🇻",
+        "Sint Maarten": "🇸🇽",
+        "Syria": "🇸🇾",
+        "Eswatini": "🇸🇿",
+        "Tristan da Cunha": "🇹🇦",
+        "Turks & Caicos Islands": "🇹🇨",
+        "Chad": "🇹🇩",
+        "French Southern Territories": "🇹🇫",
+        "Togo": "🇹🇬",
+        "Thailand": "🇹🇭",
+        "Tajikistan": "🇹🇯",
+        "Tokelau": "🇹🇰",
+        "Timor-Leste": "🇹🇱",
+        "Turkmenistan": "🇹🇲",
+        "Tunisia": "🇹🇳",
+        "Tonga": "🇹🇴",
+        "Türkiye": "🇹🇷",
+        "Trinidad & Tobago": "🇹🇹",
+        "Tuvalu": "🇹🇻",
+        "Taiwan": "🇹🇼",
+        "Tanzania": "🇹🇿",
+        "Ukraine": "🇺🇦",
+        "Uganda": "🇺🇬",
+        "U.S. Outlying Islands": "🇺🇲",
+        "United Nations": "🇺🇳",
+        "Uruguay": "🇺🇾",
+        "Uzbekistan": "🇺🇿",
+        "Vatican City": "🇻🇦",
+        "St. Vincent & Grenadines": "🇻🇨",
+        "Venezuela": "🇻🇪",
+        "British Virgin Islands": "🇻🇬",
+        "U.S. Virgin Islands": "🇻🇮",
+        "Vietnam": "🇻🇳",
+        "Vanuatu": "🇻🇺",
+        "Wallis & Futuna": "🇼🇫",
+        "Samoa": "🇼🇸",
+        "Kosovo": "🇽🇰",
+        "Yemen": "🇾🇪",
+        "Mayotte": "🇾🇹",
+        "South Africa": "🇿🇦",
+        "Zambia": "🇿🇲",
+        "Zimbabwe": "🇿🇼",
+        "England": "🏴󠁧󠁢󠁥󠁮󠁧󠁿",
+        "Scotland": "🏴󠁧󠁢󠁳󠁣󠁴󠁿",
+        "Wales": "🏴󠁧󠁢󠁷󠁬󠁳󠁿",
+    }
+    let str = ""
+    for (let o of origin.split(",")) {
+        o = o.trim()
+        let flag = flags[o as keyof typeof flags]
+        if(!flag && o.length == 2)
+            flag = [...o].map(v => String.fromCodePoint(v.codePointAt(0) - 0x41 + 0x1F1e6)).join("")
+        str += (flag || o) + " "
+    }
+    return str.trim()
+}
+
+/**
+ * Check if an item id is selected
+ * @param {bigint} id
+ * @returns {boolean}
+ */
+function items_isSelected(id: bigint): boolean {
+    for (let item of items_getSelected()) {
+        if (item.ItemId === id) {
+            return true
+        }
+    }
+    return false
+}
+
+
+/**
+ * Attempts to convert a metadata entry to an info entry as best as possible
+ * @param {MetadataEntry} meta
+ * @returns {InfoEntry}
+ */
+function items_meta2info(meta: MetadataEntry): InfoEntry {
+    return {
+        En_Title: meta.Title,
+        Native_Title: meta.Native_Title,
+        ItemId: meta.ItemId,
+        MetadataId: meta.ItemId,
+        Uid: meta.Uid,
+        ArtStyle: 0,
+        Collection: "[]",
+        Tags: [],
+        Location: "",
+        Format: -1, //indicates metadata
+        Format_Modifiers: 0,
+        Library: 0n,
+        RecommendedBy: "[]",
+        Type: "Movie",
+        Priority: 0
+    }
+}
+
+/**
+ * Attempts to convert a metadata entry to a user entry as best as possible
+ * @param {MetadataEntry} meta
+ * @returns {UserEntry}
+ */
+function items_meta2user(meta: MetadataEntry): UserEntry {
+    return {
+        CurrentPosition: "",
+        Extra: "{}",
+        ItemId: meta.ItemId,
+        Uid: meta.Uid,
+        Minutes: 0,
+        Notes: "",
+        Status: "",
+        UserRating: 0,
+        ViewCount: 0
+    }
+}
+
+/**
+ * Attempts to find the length of a media based on its mediaDependant data
+ * @param {Record<string, string>} mediaData The data object to use
+ * @returns {[number, string]} the length followed by a unit
+ */
+function items_getLength(mediaData: Record<string, string>): [number, string] {
+    for (let key in mediaData) {
+        for (let possibility of [
+            "episodes",
+            "volumes",
+            "chapters",
+            "page-count"
+        ]) {
+            if (key.endsWith(possibility)) {
+                return [parseInt(mediaData[key]), possibility]
+            }
+        }
+    }
+    return [NaN, "INVALID"]
+}
+
+function items_getProgressParts(currentPosition: string): (RegExpMatchArray | null)[] {
+    return currentPosition.split(/,\s*|\s+/)
+        .map(v => v.trim())
+        .map(v => v.match(/(\D*)(\d+(?:\.\d+)?)(?:\/(\d+))?/))
+
+}
